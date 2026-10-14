@@ -100,3 +100,28 @@ cooldown chia sẻ giữa workers. PostgreSQL contention/provider live cần ki�
 Provider v5 lưu credential mã hóa theo cơ chế native ngoài repo; không ghi AI skills/instructions vào workspace.
 Lần thử login thật trả VNSTOCK_AUTH_DEVICE_LIMIT. Theo người dùng, integration live đang chờ cấp slot,
 không tự retry login trong lúc chờ. Test normalization/manifest/limiter dùng fixtures, không thay live evidence.
+
+## Quant extraction / numerical baseline
+
+```powershell
+python backend/tools/extract_quant.py
+python -m pytest backend/tests/test_quant_parity.py -q
+# Smoke đầy đủ ARIMA/GARCH/HMM/Monte Carlo; input synthetic, không phải report thị trường.
+python backend/tools/smoke_quant.py
+```
+
+22 classes tách từ prototype vào service.quant.engines; prototype gốc giữ nguyên.
+Provider/file mapping, training-on-request, request-universe scoring và screener bonuses được loại khỏi
+engines runtime. LightGBM features giữ lại để phục vụ training/inference riêng. AST inventory tại
+docs/saas-plan/quant-field-inventory.json là công cụ đối chiếu literal keys, chưa thay report field mapping cuối cùng.
+
+Config frozen và ContextVar cô lập tham số giữa requests. Baseline lấy evaluated_at/index inputs explicit,
+tính đủ statistical/risk components; agreement, costs, stops, sizing và final score/action sẽ được ghép sau
+snapshot/model đã pin, tránh tính stops hai lần. Không dùng output baseline để giả một completed report.
+QUANTIK_NUMERICAL_THREADS mặc định 1 (1–8); backend đặt BLAS/OMP/NumExpr budgets trước scientific imports.
+
+Compatibility ghi riêng: SciPy 1.18 string-name kstest fast path không nhận loc/scale; dùng explicit
+norm.cdf callable với cùng fitted normal CDF. Numerical parity test đối chiếu 22 class AST (sau loại hàm
+đã chủ động bỏ và đổi callable này), kiểm tra distribution/statistics/Monte Carlo/cost/stops và config restoration.
+Full baseline smoke synthetic 252 bars đã chạy khoảng 18.44 giây, ARIMA/GARCH/HMM/simulation không có lỗi.
+Chưa có scientific validation trên dữ liệu live, bootstrap model hoặc customer report hoàn chỉnh.

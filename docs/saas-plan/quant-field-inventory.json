@@ -1,0 +1,673 @@
+{
+  "source": "docs/prototype/quant.py",
+  "sha256": "6b850837fadaa28010c0a3e748c97e16a2b5e9d32e2d3ed6c9b4817edc728d24",
+  "engines": {
+    "VNMarketRules": {
+      "normalize_exchange": {
+        "source_line": 139,
+        "literal_output_and_internal_keys": []
+      },
+      "profile": {
+        "source_line": 147,
+        "literal_output_and_internal_keys": []
+      },
+      "tick_size": {
+        "source_line": 154,
+        "literal_output_and_internal_keys": []
+      },
+      "round_price": {
+        "source_line": 165,
+        "literal_output_and_internal_keys": []
+      },
+      "price_band": {
+        "source_line": 176,
+        "literal_output_and_internal_keys": [
+          "ceiling",
+          "floor",
+          "limit_pct"
+        ]
+      }
+    },
+    "CostEngine": {
+      "analyze": {
+        "source_line": 188,
+        "literal_output_and_internal_keys": [
+          "breakeven_move_pct",
+          "commission_bps_per_side",
+          "gross_forecast_pct",
+          "net_forecast_pct",
+          "roundtrip_cost_bps",
+          "roundtrip_cost_pct",
+          "sell_tax_bps",
+          "slippage_bps_per_side"
+        ]
+      }
+    },
+    "DataQualityEngine": {
+      "audit": {
+        "source_line": 209,
+        "literal_output_and_internal_keys": [
+          "flags",
+          "missing_sessions_approx_pct",
+          "n_rows",
+          "price_jump_count",
+          "price_unit",
+          "score",
+          "stale_business_days",
+          "status",
+          "zero_volume_20d_pct"
+        ]
+      }
+    },
+    "LiquidityEngine": {
+      "analyze": {
+        "source_line": 288,
+        "literal_output_and_internal_keys": [
+          "adv20_shares",
+          "adv20_value_vnd",
+          "amihud_60d_per_bn",
+          "capacity_shares",
+          "gap_abs_p95_pct",
+          "max_adv_participation_pct",
+          "median20_value_vnd",
+          "near_ceiling_60d",
+          "near_floor_60d",
+          "pass",
+          "reason",
+          "tier",
+          "value_ratio_5_20",
+          "zero_volume_20d_pct"
+        ]
+      }
+    },
+    "ActionEngine": {
+      "decide": {
+        "source_line": 328,
+        "literal_output_and_internal_keys": [
+          "action",
+          "executable",
+          "gate_pass",
+          "net_forecast_pct",
+          "reason_codes"
+        ]
+      }
+    },
+    "SectorEngine": {
+      "log_returns": {
+        "source_line": 770,
+        "literal_output_and_internal_keys": []
+      },
+      "sector_trend": {
+        "source_line": 775,
+        "literal_output_and_internal_keys": [
+          "n_symbols",
+          "symbols"
+        ]
+      }
+    },
+    "CrossCorrelationEngine": {
+      "_build_return_matrix": {
+        "source_line": 837,
+        "literal_output_and_internal_keys": []
+      },
+      "lagged_ccf": {
+        "source_line": 849,
+        "literal_output_and_internal_keys": [
+          "best_corr",
+          "best_lag",
+          "pair",
+          "relation"
+        ]
+      },
+      "correlation_matrix": {
+        "source_line": 875,
+        "literal_output_and_internal_keys": []
+      },
+      "fit_var": {
+        "source_line": 879,
+        "literal_output_and_internal_keys": [
+          "aic",
+          "error",
+          "granger_causality",
+          "order",
+          "p_value",
+          "significant",
+          "symbols"
+        ]
+      },
+      "analyze_sector": {
+        "source_line": 914,
+        "literal_output_and_internal_keys": [
+          "avg_pairwise_corr",
+          "corr_matrix",
+          "error",
+          "lead_lag",
+          "n_obs",
+          "symbols",
+          "var"
+        ]
+      }
+    },
+    "DistributionAnalyzer": {
+      "full_test": {
+        "source_line": 939,
+        "literal_output_and_internal_keys": [
+          "aic",
+          "anderson_darling",
+          "conclusion",
+          "crit_5pct",
+          "dagostino",
+          "error",
+          "excess_kurtosis",
+          "hill_index",
+          "is_gaussian",
+          "jarque_bera",
+          "ks_test",
+          "laplace",
+          "mean",
+          "model_rec",
+          "n",
+          "normal",
+          "p",
+          "prob_beyond_3sigma_pct",
+          "reject",
+          "reject_count",
+          "severity",
+          "shapiro_wilk",
+          "skewness",
+          "stat",
+          "std",
+          "student_t",
+          "t_df",
+          "tail_ratio_2sigma",
+          "tail_ratio_3sigma",
+          "winner"
+        ]
+      }
+    },
+    "StatEngine": {
+      "returns": {
+        "source_line": 997,
+        "literal_output_and_internal_keys": [
+          "ann_mean_return_pct",
+          "ann_return_pct",
+          "ann_vol_pct",
+          "avg_loss_pct",
+          "avg_win_pct",
+          "calmar",
+          "daily_profit_factor",
+          "is_fat_tail",
+          "kurtosis",
+          "max_dd_pct",
+          "mean_daily_pct",
+          "metric_scope",
+          "n",
+          "profit_factor",
+          "sharpe",
+          "skewness",
+          "sortino",
+          "total_return_pct",
+          "up_day_ratio_pct",
+          "win_rate_pct"
+        ]
+      },
+      "vol_regime": {
+        "source_line": 1042,
+        "literal_output_and_internal_keys": [
+          "regime",
+          "vol_10d",
+          "vol_20d",
+          "vol_60d",
+          "vol_pctile",
+          "vol_ratio"
+        ]
+      },
+      "autocorr": {
+        "source_line": 1057,
+        "literal_output_and_internal_keys": [
+          "ac",
+          "avg_short",
+          "behavior",
+          "threshold"
+        ]
+      }
+    },
+    "ARIMAEngine": {
+      "fit": {
+        "source_line": 1070,
+        "literal_output_and_internal_keys": [
+          "adf_p",
+          "adf_stat",
+          "aic",
+          "bic",
+          "error",
+          "order",
+          "p",
+          "prices",
+          "returns_pct",
+          "sig",
+          "stationarity",
+          "stationary",
+          "val"
+        ]
+      }
+    },
+    "GARCHEngine": {
+      "fit": {
+        "source_line": 1104,
+        "literal_output_and_internal_keys": [
+          "aic",
+          "alpha",
+          "beta",
+          "current_vol_pct",
+          "error",
+          "forecast_vol",
+          "gamma",
+          "half_life",
+          "leverage",
+          "model",
+          "note",
+          "omega_pct2",
+          "p",
+          "persist_label",
+          "persistence",
+          "shock_sensitivity",
+          "simulation_params",
+          "val"
+        ]
+      }
+    },
+    "HMMEngine": {
+      "_build_features": {
+        "source_line": 1152,
+        "literal_output_and_internal_keys": [
+          "return",
+          "rolling_vol",
+          "short_mom",
+          "vol_ratio"
+        ]
+      },
+      "fit": {
+        "source_line": 1179,
+        "literal_output_and_internal_keys": [
+          "BEAR",
+          "BULL",
+          "SIDEWAY",
+          "_state_dates",
+          "_state_labels",
+          "ann_ret_pct",
+          "ann_vol_pct",
+          "avg_vol_regime",
+          "avg_volume_activity",
+          "bic",
+          "current",
+          "mean_daily_pct",
+          "method",
+          "n_features",
+          "n_inits",
+          "pct_time",
+          "prob_pct",
+          "recent_20",
+          "state_probs",
+          "states",
+          "transitions",
+          "warning"
+        ]
+      },
+      "_fallback": {
+        "source_line": 1241,
+        "literal_output_and_internal_keys": [
+          "current",
+          "method",
+          "note"
+        ]
+      }
+    },
+    "AlphaEngine": {
+      "extract": {
+        "source_line": 1253,
+        "literal_output_and_internal_keys": [
+          "alpha",
+          "alpha_ann_pct",
+          "beta",
+          "deprecated",
+          "label",
+          "macd_hist",
+          "note",
+          "obv_trend",
+          "roc_10d",
+          "rs_20d_pct",
+          "rsi",
+          "score",
+          "vol_ratio_5_20"
+        ]
+      }
+    },
+    "StructureEngine": {
+      "sr_levels": {
+        "source_line": 1312,
+        "literal_output_and_internal_keys": [
+          "method",
+          "price",
+          "resistances",
+          "str",
+          "supports",
+          "touches"
+        ]
+      },
+      "trend": {
+        "source_line": 1352,
+        "literal_output_and_internal_keys": [
+          "er",
+          "label",
+          "r2",
+          "slope_pct"
+        ]
+      },
+      "flow": {
+        "source_line": 1365,
+        "literal_output_and_internal_keys": [
+          "buy_p",
+          "cmf",
+          "label"
+        ]
+      }
+    },
+    "MomentumAlphaEngine": {
+      "analyze": {
+        "source_line": 1384,
+        "literal_output_and_internal_keys": [
+          "active",
+          "components",
+          "direction",
+          "proj_pct",
+          "reason",
+          "score",
+          "signal",
+          "strength",
+          "trend_efficiency",
+          "trend_r2"
+        ]
+      }
+    },
+    "HurstRegimeEngine": {
+      "_estimate": {
+        "source_line": 1427,
+        "literal_output_and_internal_keys": []
+      },
+      "analyze": {
+        "source_line": 1455,
+        "literal_output_and_internal_keys": [
+          "confidence",
+          "hurst",
+          "method",
+          "r2",
+          "regime",
+          "window",
+          "windows"
+        ]
+      }
+    },
+    "ConditionalResidualReversionEngine": {
+      "analyze": {
+        "source_line": 1485,
+        "literal_output_and_internal_keys": [
+          "active",
+          "coefficients",
+          "direction",
+          "hurst_regime",
+          "intercept",
+          "method",
+          "proj_pct",
+          "reason",
+          "residual_5d_pct",
+          "residual_z",
+          "sideway_probability",
+          "signal",
+          "strength",
+          "trend_efficiency"
+        ]
+      }
+    },
+    "CrossSectionalLightGBMEngine": {
+      "sector_return_series": {
+        "source_line": 1553,
+        "literal_output_and_internal_keys": []
+      },
+      "_feature_frame": {
+        "source_line": 1564,
+        "literal_output_and_internal_keys": []
+      }
+    },
+    "AgreementEngine": {
+      "combine": {
+        "source_line": 1700,
+        "literal_output_and_internal_keys": [
+          "BLOCKED",
+          "READY",
+          "WATCH",
+          "active_model_names",
+          "active_models",
+          "agreement_pct",
+          "calibrated_prob_up",
+          "component_returns",
+          "conditional_mr_ret_pct",
+          "conditional_residual_reversion",
+          "confidence",
+          "consensus",
+          "coverage_pct",
+          "directional_components",
+          "ensemble_direction",
+          "ensemble_price",
+          "ensemble_ret_pct",
+          "ensemble_uncapped_ret_pct",
+          "hurst",
+          "lightgbm_cross_sectional",
+          "lightgbm_ret_pct",
+          "mc_distribution_mean_ret_pct",
+          "meta_status",
+          "meta_trust_probability",
+          "momentum",
+          "momentum_ret_pct",
+          "signal_strong",
+          "support_pct",
+          "timing",
+          "timing_status",
+          "total_models",
+          "weights"
+        ]
+      }
+    },
+    "FcastEngine": {
+      "ensemble": {
+        "source_line": 1800,
+        "literal_output_and_internal_keys": [
+          "_mc_paths",
+          "avg_dd_lock_pct",
+          "ci_hi",
+          "ci_hi_unlock",
+          "ci_lo",
+          "ci_lo_unlock",
+          "distribution_only",
+          "hold_plan_label",
+          "hold_plan_sessions",
+          "horizon",
+          "innovation_df",
+          "last_price",
+          "lock_risk",
+          "lock_sessions",
+          "lower",
+          "max_dd_lock_pct",
+          "mc",
+          "mc_distribution_mean_ret_pct",
+          "mc_path",
+          "median",
+          "price",
+          "price_at_unlock",
+          "prob_loss_gt_3pct",
+          "prob_loss_in_lock_pct",
+          "prob_up",
+          "prob_up_at_unlock",
+          "recursive_vol",
+          "unlock",
+          "upper",
+          "vol_source"
+        ]
+      }
+    },
+    "RiskEng": {
+      "atr": {
+        "source_line": 1936,
+        "literal_output_and_internal_keys": []
+      },
+      "tick_round": {
+        "source_line": 1944,
+        "literal_output_and_internal_keys": []
+      },
+      "_simulate_trade_2tp": {
+        "source_line": 1962,
+        "literal_output_and_internal_keys": []
+      },
+      "_expectancy_grid_search": {
+        "source_line": 2020,
+        "literal_output_and_internal_keys": [
+          "avg_loss_r",
+          "avg_win_r",
+          "best",
+          "expectancy_r",
+          "k_sl",
+          "k_tp1",
+          "k_tp2",
+          "n_trades",
+          "rr1",
+          "rr2",
+          "top5",
+          "win_rate"
+        ]
+      },
+      "stops": {
+        "source_line": 2074,
+        "literal_output_and_internal_keys": [
+          "atr",
+          "atr_stop_pct",
+          "base_tp2",
+          "construction",
+          "conviction",
+          "conviction_tp2",
+          "entry",
+          "ev_r_per_trade",
+          "ev_vnd_per_share",
+          "exchange",
+          "forecast_conviction_pct",
+          "grid_search_detail",
+          "grid_search_note",
+          "k_sl",
+          "k_tp1",
+          "k_tp2",
+          "lock_risk_flag",
+          "lock_sessions",
+          "mae_lock_10pct",
+          "mae_lock_note",
+          "mfe_p90_pct",
+          "model_agreement_pct",
+          "n_trades_backtest",
+          "optimization_enabled",
+          "p_win_backtest",
+          "p_win_blended",
+          "plan_valid",
+          "risk_per_share",
+          "rr1",
+          "rr2",
+          "rr_net_cost",
+          "rr_optimal",
+          "settlement",
+          "sl_max",
+          "sl_pct",
+          "sl_sanity_note",
+          "sl_swing",
+          "sl_wide",
+          "stop_floor_pct",
+          "swing_low_10",
+          "swing_low_20",
+          "tp1",
+          "tp1_exit_fraction",
+          "tp2",
+          "tp_2r",
+          "tp_3r",
+          "tp_4r",
+          "tp_optimal",
+          "tp_realistic_cap",
+          "tp_was_capped",
+          "trail_atr",
+          "trail_note",
+          "warning"
+        ]
+      },
+      "sizing": {
+        "source_line": 2265,
+        "literal_output_and_internal_keys": [
+          "account_size_vnd",
+          "allocation",
+          "binding_constraints",
+          "capital_lock_days",
+          "capital_lock_note",
+          "liquidity",
+          "max_loss",
+          "pct_acct",
+          "risk",
+          "risk_budget_vnd",
+          "risk_pct_nav",
+          "risk_per_share_vnd",
+          "shares",
+          "shares_by_allocation",
+          "shares_by_liquidity",
+          "shares_by_risk",
+          "value"
+        ]
+      },
+      "kelly": {
+        "source_line": 2295,
+        "literal_output_and_internal_keys": [
+          "edge_pct",
+          "full_pct",
+          "half_pct",
+          "has_edge"
+        ]
+      }
+    },
+    "AdaptiveScorer": {
+      "_robust_zscore": {
+        "source_line": 2312,
+        "literal_output_and_internal_keys": []
+      },
+      "extract_factors": {
+        "source_line": 2320,
+        "literal_output_and_internal_keys": [
+          "A",
+          "B",
+          "C",
+          "D",
+          "alpha_composite",
+          "cmf",
+          "data_quality",
+          "distribution_quality",
+          "forecast_conf",
+          "forecast_ret",
+          "hmm_regime",
+          "liquidity",
+          "lock_safety",
+          "sharpe",
+          "trend_quality",
+          "vol_regime"
+        ]
+      },
+      "_detect_vni_regime": {
+        "source_line": 2432,
+        "literal_output_and_internal_keys": []
+      }
+    }
+  },
+  "compatibility_changes": [
+    "scipy-1.18-explicit-normal-cdf"
+  ]
+}

@@ -60,3 +60,20 @@ History revisions hiện lưu payload nguyên chuỗi để bắt đầu pipelin
 chuyển bars sang storage chuyên dụng, giữ nguyên revision/manifest contracts.
 Test local đã đạt units, provisional/completed readiness, bad bars, caps, correction, coverage,
 mixed-version rejection và shared budget across sessions. Chưa có provider live hay multi-worker PG evidence.
+
+## Thành phần pure quant baseline
+
+Tách 22 classes bằng AST/source slices, không execute/import prototype và không sửa snapshot gốc.
+Giữ numerical methods; bỏ SectorEngine provider/watchlist loaders, LightGBM fit_predict theo request,
+và AdaptiveScorer request-batch/absolute scoring có screener bonuses. Những phương pháp scoring/training mới
+phải được triển khai riêng theo market snapshot/published model contracts.
+
+Config frozen + ContextVar, explicit evaluated_at cho data audit, process numerical thread budget mặc định 1.
+Inventory ghi normalized-source SHA và literal keys theo engine/method (bao gồm internal keys); chưa đủ để
+khóa nested report schema. Full baseline runner giữ statistical components trước agreement/cost/plan.
+
+Smoke phát hiện SciPy 1.18 string-name kstest tối ưu thành ndtr không nhận loc/scale. Extraction đổi đúng
+một lời gọi sang stats.norm.cdf callable, giữ cùng CDF/params, ghi compatibility change riêng.
+Parity AST của 22 classes sau transformations và numerical parity critical methods đã đạt; config restoration đạt.
+Full baseline synthetic 252 bars: 25 output groups, 18.44 giây, component_errors rỗng;
+ARIMA/GARCH/HMM/simulation outputs đầy đủ và không có error. Đây không thay live scientific/model evidence.
