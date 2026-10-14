@@ -14,7 +14,7 @@ from sqlalchemy import select
 from service.api import create_app
 from service.db import make_engine, session_factory
 from service.identity import seed_admin
-from service.models import Account
+from service.models import Account, QuotaBucket
 from service.settings import Settings
 
 
@@ -80,6 +80,22 @@ def test_google_exchange_browser_binding_and_role_isolation(tmp_path, monkeypatc
         headers = {"Authorization": f"Bearer {access}"}
         assert client.get("/api/v1/me", headers=headers).status_code == 200
         assert client.get("/api/v1/admin/me", headers=headers).status_code == 401
+        assert client.get("/health/ready").status_code == 200
+        owner_id = client.get("/api/v1/me", headers=headers).json()["id"]
+        with session_factory(engine)() as db, db.begin():
+            db.add(QuotaBucket(account_id=owner_id, valid_from=int(time.time())-10,
+                valid_until=int(time.time())+1000, quota_total=5, active_limit=2, entitlement_version="fixture"))
+        analysis_body = {"symbol": "FPT", "target_session": "2026-10-14"}
+        job_headers = headers | {"Idempotency-Key": "http-fixture-job"}
+        result = client.post("/api/v1/analyses", json=analysis_body, headers=job_headers)
+        assert result.status_code == 202
+        job_id = result.json()["id"]
+        assert client.post("/api/v1/analyses", json=analysis_body, headers=job_headers).json()["id"] == job_id
+        assert client.get("/api/v1/analyses", headers=headers).json()["items"][0]["id"] == job_id
+        assert client.get("/api/v1/analyses/unknown", headers=headers).status_code == 404
+        result = client.post(f"/api/v1/analyses/{job_id}/cancel", headers=headers)
+        assert result.json()["quota_effect"] == "RELEASED"
+        assert client.get("/api/v1/me/usage", headers=headers).json()["buckets"][0]["reserved"] == 0
         assert client.post("/api/v1/auth/exchange", json={"code": exchange},
             headers=origin | {"Cookie": f"quantik_oauth_browser={browser}"}).status_code == 401
         assert client.post("/api/v1/auth/refresh", headers=origin).status_code == 200

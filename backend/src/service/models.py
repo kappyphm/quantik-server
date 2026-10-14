@@ -1,6 +1,7 @@
 from uuid import uuid4
 
-from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Integer, JSON, String, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, Date, ForeignKey, Integer, JSON, String, UniqueConstraint
+from datetime import date
 from sqlalchemy.orm import Mapped, mapped_column
 
 from service.db import Base
@@ -65,3 +66,81 @@ class OAuthFlow(Base):
     stage: Mapped[str] = mapped_column(String(16), default="STARTED")
     account_id: Mapped[str | None] = mapped_column(ForeignKey("accounts.id"))
     exchange_hash: Mapped[str | None] = mapped_column(String(64), unique=True)
+
+
+class QuotaBucket(Base):
+    __tablename__ = "quota_buckets"
+    __table_args__ = (CheckConstraint("quota_total >= 0 AND consumed >= 0 AND reserved >= 0"),
+        CheckConstraint("consumed + reserved <= quota_total"),
+        CheckConstraint("active_jobs >= 0 AND active_limit > 0"))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
+    valid_from: Mapped[int] = mapped_column(Integer)
+    valid_until: Mapped[int] = mapped_column(Integer)
+    quota_total: Mapped[int] = mapped_column(Integer)
+    consumed: Mapped[int] = mapped_column(Integer, default=0)
+    reserved: Mapped[int] = mapped_column(Integer, default=0)
+    active_jobs: Mapped[int] = mapped_column(Integer, default=0)
+    active_limit: Mapped[int] = mapped_column(Integer)
+    entitlement_version: Mapped[str] = mapped_column(String(100))
+
+
+class Job(Base):
+    __tablename__ = "jobs"
+    __table_args__ = (UniqueConstraint("account_id", "idempotency_key"),
+        CheckConstraint("status IN ('QUEUED','WAITING_DATA','RUNNING','RETRY_WAIT','SUCCEEDED','FAILED','CANCELLED')"))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
+    bucket_id: Mapped[str] = mapped_column(ForeignKey("quota_buckets.id"))
+    idempotency_key: Mapped[str] = mapped_column(String(128))
+    payload_hash: Mapped[str] = mapped_column(String(64))
+    symbol: Mapped[str] = mapped_column(String(16))
+    target_session: Mapped[date] = mapped_column(Date)
+    inputs: Mapped[dict] = mapped_column(JSON)
+    pinned_versions: Mapped[dict | None] = mapped_column(JSON)
+    policy: Mapped[dict] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(20), default="QUEUED", index=True)
+    created_at: Mapped[int] = mapped_column(Integer)
+    deadline: Mapped[int] = mapped_column(Integer)
+    ready_at: Mapped[int] = mapped_column(Integer)
+    attempt: Mapped[int] = mapped_column(Integer, default=0)
+    execution_token: Mapped[str | None] = mapped_column(String(36))
+    lease_until: Mapped[int | None] = mapped_column(Integer)
+    compute_started_at: Mapped[int | None] = mapped_column(Integer)
+    reason: Mapped[str | None] = mapped_column(String(100))
+
+
+class Reservation(Base):
+    __tablename__ = "reservations"
+    __table_args__ = (CheckConstraint("state IN ('RESERVED','CONSUMED','RELEASED')"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), unique=True)
+    bucket_id: Mapped[str] = mapped_column(ForeignKey("quota_buckets.id"))
+    state: Mapped[str] = mapped_column(String(16), default="RESERVED")
+
+
+class UsageLedger(Base):
+    __tablename__ = "usage_ledger"
+    __table_args__ = (UniqueConstraint("reservation_id", "effect"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    reservation_id: Mapped[str] = mapped_column(ForeignKey("reservations.id"))
+    effect: Mapped[str] = mapped_column(String(16))
+    occurred_at: Mapped[int] = mapped_column(Integer)
+    reason: Mapped[str] = mapped_column(String(100))
+
+
+class Outbox(Base):
+    __tablename__ = "outbox"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), index=True)
+    event: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[int] = mapped_column(Integer)
+    published_at: Mapped[int | None] = mapped_column(Integer)
+
+
+class AnalysisReport(Base):
+    __tablename__ = "analysis_reports"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), unique=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
+    payload: Mapped[dict] = mapped_column(JSON)

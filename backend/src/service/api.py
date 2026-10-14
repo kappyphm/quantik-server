@@ -1,16 +1,19 @@
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, Request, Response
+from fastapi import Depends, FastAPI, Header, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, Field
-from sqlalchemy import text
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import select, text
+from datetime import date
 
 from service.db import make_engine, session_factory
 from service.identity import AuthError, Identity
 from service.google_auth import GoogleProvider, callback, exchange_identity, start_flow
+from service import jobs
+from service.models import AnalysisReport, Job, QuotaBucket, Reservation
 from service.settings import Settings
 
 
@@ -21,6 +24,19 @@ class AdminLogin(BaseModel):
 
 class AuthExchange(BaseModel):
     code: str = Field(min_length=20, max_length=128)
+
+
+class Sizing(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    account_size_vnd: float = Field(gt=0)
+    max_position_risk_ratio: float = Field(gt=0, le=0.1, default=0.02)
+
+
+class AnalysisRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    symbol: str = Field(pattern=r"^[A-Z0-9]{2,16}$")
+    target_session: date
+    sizing: Sizing | None = None
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -56,6 +72,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def auth_error(request: Request, exc: AuthError):
         return JSONResponse(status_code=exc.status, content={"code": exc.code,
             "message": "Authentication failed", "request_id": request.state.request_id})
+
+    @app.exception_handler(jobs.JobError)
+    async def job_error(request: Request, exc: jobs.JobError):
+        return JSONResponse(status_code=exc.status, content={"code": exc.code,
+            "message": "Job operation failed", "request_id": request.state.request_id})
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError):
@@ -94,7 +115,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def ready(db=Depends(db_session)):
         try:
             revision = db.scalar(text("SELECT version_num FROM alembic_version"))
-            if revision != "0002":
+            if revision != "0003":
                 raise ValueError("Migration required")
         except Exception:
             return JSONResponse(status_code=503, content={"status": "not_ready", "reason": "DATABASE_SCHEMA"})
@@ -174,5 +195,55 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/v1/me")
     def profile(account=Depends(user)):
         return {"id": account.id, "role": account.role}
+
+    def job_response(db, job):
+        reservation = db.scalar(select(Reservation).where(Reservation.job_id == job.id))
+        report = db.scalar(select(AnalysisReport).where(AnalysisReport.job_id == job.id))
+        return {"id": job.id, "symbol": job.symbol, "target_session": job.target_session,
+            "status": job.status, "reason": job.reason, "quota_effect": reservation.state,
+            "report_id": report.id if report else None, "compute_started_at": job.compute_started_at}
+
+    @app.post("/api/v1/analyses", status_code=202)
+    def create_analysis(body: AnalysisRequest, account=Depends(user), db=Depends(db_session),
+                        idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128)):
+        job = jobs.admit(db, account.id, body.symbol, body.target_session, idempotency_key,
+            body.sizing.model_dump() if body.sizing else None)
+        db.commit()
+        return job_response(db, job)
+
+    @app.get("/api/v1/analyses")
+    def analyses(account=Depends(user), db=Depends(db_session), cursor: str | None = None):
+        stmt = select(Job).where(Job.account_id == account.id)
+        if cursor:
+            stmt = stmt.where(Job.id > cursor)
+        result = list(db.scalars(stmt.order_by(Job.id).limit(51)))
+        return {"items": [job_response(db, job) for job in result[:50]],
+            "next_cursor": result[49].id if len(result) > 50 else None}
+
+    @app.get("/api/v1/analyses/{job_id}")
+    def analysis(job_id: str, account=Depends(user), db=Depends(db_session)):
+        return job_response(db, jobs.owned_job(db, account.id, job_id))
+
+    @app.post("/api/v1/analyses/{job_id}/cancel")
+    def cancel_analysis(job_id: str, account=Depends(user), db=Depends(db_session)):
+        job = jobs.cancel(db, account.id, job_id)
+        db.commit()
+        return job_response(db, job)
+
+    @app.get("/api/v1/reports/{report_id}")
+    def report(report_id: str, account=Depends(user), db=Depends(db_session)):
+        report = db.scalar(select(AnalysisReport).where(AnalysisReport.id == report_id,
+            AnalysisReport.account_id == account.id))
+        if not report:
+            raise jobs.JobError("NOT_FOUND", 404)
+        return {"report_id": report.id, **report.payload}
+
+    @app.get("/api/v1/me/usage")
+    def usage(account=Depends(user), db=Depends(db_session)):
+        return {"buckets": [{"id": b.id, "total": b.quota_total, "reserved": b.reserved,
+            "consumed": b.consumed, "active_jobs": b.active_jobs, "active_limit": b.active_limit,
+            "valid_from": b.valid_from, "valid_until": b.valid_until}
+            for b in db.scalars(select(QuotaBucket).where(QuotaBucket.account_id == account.id)
+                .order_by(QuotaBucket.valid_from.desc()).limit(50))]}
 
     return app

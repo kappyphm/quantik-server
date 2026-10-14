@@ -27,3 +27,21 @@ Các phần Google login, customer jobs, billing, provider và scientific pipeli
 user refresh/logout và role/audience isolation. Migration 0002 lưu OAuth flow dùng chung giữa replicas.
 Provider credentials có trong .env; chưa chứng minh Google consent/redirect hoạt động live.
 Admin local đã seed thành công sau khi người dùng cập nhật mật khẩu đủ độ dài.
+
+## Thành phần jobs/quota
+
+Agent chọn P-13 cho beta-1: cancel sau compute consume, errors release, pin entitlement/bucket/policy tại admission.
+Job/outbox/reservation atomic; unique account/idempotency; lease/fencing; completed report/settlement atomic.
+API user hỗ trợ admission, status/history/cancel/reports/usage và ownership. Test local kiểm tra redelivery claim,
+cancel-completion ordering, stale worker, pinned retries, original bucket release và incomplete reports.
+Đây chưa phải evidence PostgreSQL concurrent races; RabbitMQ dispatcher/worker chưa có.
+
+Minimum report gate hiện yêu cầu đủ 16 nhóm theo inventory tài liệu, với 10 nhóm required AVAILABLE;
+ARIMA/GARCH/HMM/context/distribution/technical vẫn có thể UNAVAILABLE kèm reasons.
+Gate nested fields/numerical parity chưa đạt; sẽ siết theo output inventory, không publish report giả ra khách.
+
+## Evidence runtime local
+
+API uvicorn local khởi động thành công; health/live, health/ready, login admin và admin/me trả HTTP 200
+với cấu hình thật trong .env; logout hoàn tất. Hai kiểm tra identity và một kiểm tra jobs core đã đạt.
+Không build image, tạo container hay volume Docker. Chưa có live Google consent, SePay/Vnstock hoặc VPS evidence.

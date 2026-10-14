@@ -2,11 +2,12 @@
 
 ## Project Structure & Module Organization
 
-This repository currently contains design documents and Python prototypes; the backend is not scaffolded yet.
+This repository contains design documents, preserved Python prototypes, and an in-progress backend.
 
 - `docs/saas-plan/`: requirements, decisions, architecture, pipelines, API contracts, and delivery gates. Start with `README.md` and `01-decisions.md`.
 - `docs/prototype/`: reference snapshots (`crawl_data.py`, `quant.py`, `quant_visuals.py`, `backtest.py`). Preserve these files for comparison; implement extracted functionality separately.
-- Planned: `backend/src/service/` for domain modules, `backend/migrations/`, `backend/tests/`, `deploy/`, and `load-tests/`. Create directories when implementation needs them.
+- `backend/src/service/`: API, identity, database, jobs/quota and report contracts. `backend/migrations/` contains Alembic migrations; `backend/tests/` contains focused critical checks.
+- Planned: `deploy/` and `load-tests/`. Create directories when implementation needs them.
 
 Keep quant engines independent of providers, persistence, and accounts. Put input resolution in analysis orchestration and provider access in market-data adapters.
 
@@ -20,7 +21,7 @@ rg -n 'OPEN|PROPOSED' docs/saas-plan # Find unresolved decisions
 python -c "import ast,pathlib; [ast.parse(p.read_text(encoding='utf-8-sig'), filename=str(p)) for p in pathlib.Path('docs/prototype').glob('*.py')]"
 ```
 
-The Python command checks syntax without importing prototypes or fetching data. No dependency manifest, build script, Docker configuration, or test runner configuration exists yet. Document actual install/run/test commands when adding the backend; do not present planned commands as working tooling.
+The Python command checks syntax without importing prototypes or fetching data. Backend install/run/test commands are in root README.md and backend/pyproject.toml. Activate the shared $HOME/.venv before Python commands. No Docker deployment exists yet; do not present planned commands as working tooling.
 
 ## Coding Style & Naming Conventions
 
@@ -38,7 +39,7 @@ If tests are added, prefer pytest and `test_<behavior>.py` under `backend/tests/
 
 ## Commit & Pull Request Guidelines
 
-No Git metadata is available in this checkout, so existing commit conventions cannot be verified. Use concise imperative messages, preferably `docs:`, `feat:`, or `fix:` prefixes.
+Git is initialized on main. Commit each completed independent component or flow as requested by the user. Use concise imperative messages, preferably `docs:`, `feat:`, or `fix:` prefixes.
 
 PRs should explain the change, link relevant requirement/decision IDs or issues, record verification and limitations, and identify scientific or policy changes. Include screenshots only for visual changes.
 
