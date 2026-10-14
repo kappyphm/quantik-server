@@ -16,6 +16,8 @@ Tài liệu đủ để bắt đầu implementation. Các mục PROPOSED là thi
 | [04 — Hợp đồng đầu ra và pipeline](04-pipelines-and-reports.md) | Bảo toàn prototype, screening, quant và training |
 | [05 — API, auth và billing](05-api-auth-billing.md) | JWT, endpoints, quota và SePay |
 | [06 — Triển khai và vận hành](06-delivery-and-operations.md) | Mốc ba ngày, Docker, monitoring và kiểm thử |
+| [07 — Implementation log](07-implementation-log.md) | Quyết định triển khai và evidence thực tế |
+| [08 — Report mapping](08-report-field-mapping.md) | Nested outputs và compatibility contract |
 
 ## Quy ước
 

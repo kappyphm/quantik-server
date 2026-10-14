@@ -174,6 +174,13 @@ class DataManifest(Base):
     histories: Mapped[dict] = mapped_column(JSON)
     coverage: Mapped[dict] = mapped_column(JSON)
     created_at: Mapped[int] = mapped_column(Integer)
+    revision_order: Mapped[int] = mapped_column(Integer, server_default="0")
+
+
+class MarketRevisionClock(Base):
+    __tablename__ = "market_revision_clock"
+    name: Mapped[str] = mapped_column(String(100), primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer)
 
 
 class ProviderGate(Base):
@@ -207,3 +214,35 @@ class PublishedModel(Base):
     __tablename__ = "published_models"
     name: Mapped[str] = mapped_column(String(100), primary_key=True)
     model_id: Mapped[str] = mapped_column(ForeignKey("model_versions.id"))
+
+
+class ComponentResult(Base):
+    __tablename__ = "component_results"
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    status: Mapped[str] = mapped_column(String(16))
+    execution_token: Mapped[str | None] = mapped_column(String(36))
+    lease_until: Mapped[int] = mapped_column(Integer)
+    payload: Mapped[dict | None] = mapped_column(JSON)
+
+
+class MarketSnapshot(Base):
+    __tablename__ = "market_snapshots"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    dependency_key: Mapped[str] = mapped_column(String(64), unique=True)
+    manifest_id: Mapped[str] = mapped_column(ForeignKey("data_manifests.id"))
+    model_id: Mapped[str | None] = mapped_column(ForeignKey("model_versions.id"))
+    target_session: Mapped[date] = mapped_column(Date, index=True)
+    created_at: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(16))
+    execution_token: Mapped[str | None] = mapped_column(String(36))
+    lease_until: Mapped[int] = mapped_column(Integer)
+    config: Mapped[dict] = mapped_column(JSON)
+    payload: Mapped[dict | None] = mapped_column(JSON)
+    payload_checksum: Mapped[str | None] = mapped_column(String(64))
+    reason: Mapped[str | None] = mapped_column(String(100))
+
+
+class PublishedSnapshot(Base):
+    __tablename__ = "published_snapshots"
+    name: Mapped[str] = mapped_column(String(100), primary_key=True)
+    snapshot_id: Mapped[str] = mapped_column(ForeignKey("market_snapshots.id"))

@@ -16,7 +16,7 @@ from service.settings import Settings
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="quantik")
-    parser.add_argument("command", choices=["migrate", "generate-keys", "seed-admin", "ingest-market", "train-model", "publish-model"])
+    parser.add_argument("command", choices=["migrate", "generate-keys", "seed-admin", "ingest-market", "train-model", "publish-model", "build-snapshot"])
     parser.add_argument("--target-session", type=date.fromisoformat)
     parser.add_argument("--start", type=date.fromisoformat, default=date(2021, 1, 1))
     parser.add_argument("--symbol", action="append")
@@ -55,7 +55,7 @@ def main() -> None:
         print(result)
         if result["manifest_id"] is None:
             raise SystemExit(1)
-    elif args.command in {"train-model", "publish-model"}:
+    elif args.command in {"train-model", "publish-model", "build-snapshot"}:
         from dataclasses import replace
         from service.model_lifecycle import promote_model, train_manifest
         from service.market_data import DataError
@@ -63,7 +63,13 @@ def main() -> None:
         engine = make_engine(settings.database_url)
         sessions = session_factory(engine)
         try:
-            if args.command == "train-model":
+            if args.command == "build-snapshot":
+                if not args.manifest_id:
+                    parser.error("build-snapshot requires --manifest-id")
+                from service.snapshots import build_market_snapshot
+                snapshot = build_market_snapshot(sessions, args.manifest_id, replace(QuantConfig(), PRICE_INPUT_UNIT="VND"))
+                print({"snapshot_id": snapshot.id, "status": snapshot.status, "coverage_ratio": snapshot.payload["coverage_ratio"]})
+            elif args.command == "train-model":
                 if not args.manifest_id:
                     parser.error("train-model requires --manifest-id")
                 model = train_manifest(sessions, args.manifest_id, replace(QuantConfig(), PRICE_INPUT_UNIT="VND"))

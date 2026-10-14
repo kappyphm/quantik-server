@@ -71,6 +71,20 @@ def main() -> None:
         if isinstance(node, ast.Attribute) and node.attr in {"read_csv", "read_excel", "to_csv", "to_excel", "read_bytes", "write_bytes"}:
             raise RuntimeError("File access leaked into engines")
     (OUTPUT / "engines.py").write_text(generated, encoding="utf-8")
+    narrative = '"""Preserved prototype commentary; provider/export/tracking methods excluded."""\n'
+    narrative += 'import math\nimport numpy as np\nfrom service.quant.configuration import CFG\n\n'
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id in {"RATINGS", "BUY_ACTIONS"} for t in node.targets):
+            narrative += "".join(lines[node.lineno-1:node.end_lineno]) + "\n"
+        if isinstance(node, ast.FunctionDef) and node.name in {"final_action", "action_rating", "num", "above", "below", "commentary"}:
+            narrative += "".join(lines[node.lineno-1:node.end_lineno]) + "\n\n"
+    narrative += "class PrototypeCommentary:\n"
+    pipeline = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "QuantPipeline")
+    for method in pipeline.body:
+        if isinstance(method, ast.FunctionDef) and (method.name == "generate_commentary" or method.name.startswith("_section_")):
+            narrative += "".join(lines[method.lineno-1:method.end_lineno]) + "\n\n"
+    ast.parse(narrative)
+    (OUTPUT / "commentary.py").write_text(narrative, encoding="utf-8")
     (ROOT / "docs/saas-plan/quant-field-inventory.json").write_text(json.dumps(inventory,
         ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"Extracted {len(engines)} pure engine classes; source hash recorded")

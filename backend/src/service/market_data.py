@@ -10,10 +10,10 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from service.models import DataManifest, HistoryRevision, UniverseVersion, new_id
+from service.models import DataManifest, HistoryRevision, MarketRevisionClock, UniverseVersion, new_id
 
 VN_TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
 InputMode = Literal["COMPLETED_DAILY", "PROVISIONAL_DAILY"]
@@ -176,5 +176,16 @@ def publish_manifest(db: Session, universe: UniverseVersion, histories: dict[str
         "excluded": sorted(set(members) - available), "minimum_ratio": minimum_coverage_ratio}
     identity = {"universe": universe.id, "target_session": target_session.isoformat(),
         "input_mode": input_mode, "histories": refs, "coverage": coverage}
+    existing = db.scalar(select(DataManifest).where(DataManifest.checksum == checksum(identity)))
+    if existing:
+        return existing
+    if db.get_bind().dialect.name == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert
+    else:
+        from sqlalchemy.dialects.sqlite import insert
+    db.execute(insert(MarketRevisionClock).values(name="manifest", revision=0)
+        .on_conflict_do_nothing(index_elements=["name"]))
+    revision = db.scalar(update(MarketRevisionClock).where(MarketRevisionClock.name == "manifest")
+        .values(revision=MarketRevisionClock.revision + 1).returning(MarketRevisionClock.revision))
     return persist_immutable(db, DataManifest, identity, universe_id=universe.id, target_session=target_session,
-        input_mode=input_mode, histories=refs, coverage=coverage, created_at=int(time.time()))
+        input_mode=input_mode, histories=refs, coverage=coverage, created_at=int(time.time()), revision_order=revision)

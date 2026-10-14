@@ -1,5 +1,6 @@
 """Stock-specific computations; final agreement/plan depend on a pinned market snapshot."""
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -15,7 +16,7 @@ def compute_baseline(symbol: str, frame: pd.DataFrame, *, exchange: str, evaluat
     if e.VNMarketRules.normalize_exchange(exchange) == "UNKNOWN":
         raise ValueError("Unknown exchange")
     with engine_context(config):
-        quality = e.DataQualityEngine.audit(frame, exchange, as_of=evaluated_at)
+        quality = e.DataQualityEngine.audit(frame, exchange, as_of=evaluated_at.astimezone(ZoneInfo("Asia/Ho_Chi_Minh")))
         if quality["status"] == "FAIL":
             return {"symbol": symbol, "exchange": exchange, "data_quality": quality,
                 "error": "DATA_QUALITY_FAIL"}
@@ -28,6 +29,8 @@ def compute_baseline(symbol: str, frame: pd.DataFrame, *, exchange: str, evaluat
         regime = e.AdaptiveScorer._detect_vni_regime(index_frame)
         prices = frame.close
         report = {"symbol": symbol, "exchange": exchange, "n": len(frame),
+            "range": f"{frame.index[0].date().isoformat()} -> {frame.index[-1].date().isoformat()}",
+            "date": evaluated_at.isoformat(),
             "data_quality": quality, "liquidity": e.LiquidityEngine.analyze(frame, exchange),
             "vni_regime": regime, "_price_dates": [stamp.isoformat() for stamp in frame.index],
             "_price_close": prices.tolist(), "component_errors": {}}

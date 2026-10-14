@@ -18,8 +18,10 @@ def manifest_frames(db, manifest: DataManifest) -> tuple[dict, object, dict]:
     data, sectors, index = {}, {}, None
     for symbol, history_id in manifest.histories.items():
         history = db.get(HistoryRevision, history_id)
-        if not history or history.symbol != symbol or history.target_session != manifest.target_session:
+        if not history or history.symbol != symbol or history.target_session != manifest.target_session or history.input_mode != "COMPLETED_DAILY":
             raise DataError("MANIFEST_HISTORY_MISMATCH")
+        if checksum(history.payload) != history.checksum:
+            raise DataError("HISTORY_CHECKSUM_MISMATCH")
         frame = DailyHistory(symbol, history.target_session, history.input_mode, history.payload).frame()
         if symbol == "VNINDEX":
             index = frame

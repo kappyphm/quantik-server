@@ -91,3 +91,22 @@ checksum gate, validation gate, live-data gate, không ghi đè model cutoff m�
 Model fixture không publish; provenance phân biệt FIXTURE/LIVE_UNVERIFIED/LIVE_VALIDATED.
 Test synthetic 6 symbols/400 bars đạt temporal separation, deterministic inference/rank ordering,
 stale-symbol exclusion, artifact idempotency và fixture promotion rejection. Không có bootstrap live model.
+
+## Thành phần market snapshot và report assembly
+
+Component cache và snapshot builder có unique dependency keys, lease/token/fencing; input versions pin theo
+manifest/model/config/engine/policy/evaluation-day. Baseline eligibility trước global inference/rank/sector factors.
+Agent chọn minimum 5 eligible members + 80% universe; zero-IQR hoặc n<3 đóng góp z=0, reason/version explicit.
+Model warn 14 ngày, disable 28 ngày; build model unavailable không giả prediction/rank.
+
+Monotonic manifest revision allocator và atomic published snapshot pointer giữ correction mới khi builder cũ retry.
+Failed run giữ latest. Snapshot cache/read có checksum. Per-request score đọc immutable reference,
+không dùng request universe hoặc screening labels. Sizing personalized không thay reference normalization.
+
+Final graph agreement → costs → stops → sizing → score → action. LightGBM unavailable chặn BUY_NOW/executable.
+Commentary được extract từ prototype; mappings giữ nested outputs/series, raw MC paths thay bằng quantile
+trajectories, meta-label/tracking/Kelly disabled rõ. ReportResult exposed OpenAPI; mapping tại mục 08.
+
+Test fixtures đạt snapshot cache reuse, single/batch invariance, report 16 sections/commentary,
+old-builder/correction ordering và failure không đổi pointer. Migrations đến 0006 đã được tạo;
+PostgreSQL concurrency, live full reports và scientific bootstrap vẫn chưa nghiệm thu.

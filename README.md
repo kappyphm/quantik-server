@@ -146,3 +146,27 @@ Publication kiểm tra checksum, validation và live-data evidence, cập nhật
 giữ model đang publish. Fixture mặc định có provenance FIXTURE; provider fetch ghi LIVE_UNVERIFIED.
 Chưa có đường tự đổi UNVERIFIED thành VERIFIED, nên chưa publish model từ dữ liệu chưa kiểm định.
 Test temporal training/inference/revisions và fixture publication rejection đã đạt; lịch weekly chưa được nối scheduler.
+
+## Market snapshots / report assembly
+
+```powershell
+quantik build-snapshot --manifest-id <ready-completed-manifest-id>
+python -m pytest backend/tests/test_snapshots.py -q
+```
+
+Snapshot builder cache baseline theo history/index/config/engine/evaluation-day, có lease/fencing cho cả
+component và snapshot. Tính sector context, LightGBM inference/rank và factor reference trên eligible universe;
+không lấy tập mã user đang request. Eligibility cần history đúng phiên, sector và baseline hợp lệ; publish
+yêu cầu ít nhất 5 mã và 80% universe (beta-1), exclusions rõ. Model ≥14 ngày warning, ≥28 ngày unavailable.
+Snapshot payload checksum, atomic pointer và manifest revision counter ngăn bản cũ ghi đè correction mới.
+
+Customer finalization dùng reference đã pin, tính agreement/cost trước stops và sizing, score không có screener
+bonus. Zero-IQR/minimum sample xử lý z=0 với lý do rõ. Sizing reference 500 triệu hoặc personalized;
+LightGBM unavailable luôn chặn executable BUY_NOW. Report có 16 sections, giữ nested outputs/series và
+commentary gốc; mapping tại [08-report-field-mapping.md](docs/saas-plan/08-report-field-mapping.md).
+OpenAPI expose ReportResult. Raw MC paths được bỏ, quantile trajectories và summaries giữ nguyên.
+
+Test fixture đã đạt single/batch score/action invariance, baseline cache reuse, full report envelope/commentary,
+correction publication order và failed build giữ latest. Baseline statistical model fitting đã smoke riêng;
+test snapshot thay thế phần fitting bằng fixture để kiểm tra orchestration. Chưa có customer worker/dispatcher,
+live full-universe benchmark hoặc model/data scientific gate đạt.

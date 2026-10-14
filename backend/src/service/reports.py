@@ -53,3 +53,7 @@ class Report(BaseModel):
         if not self.decision or not self.commentary:
             raise ValueError("Missing decision or commentary")
         return self
+
+
+class ReportResult(Report):
+    report_id: str

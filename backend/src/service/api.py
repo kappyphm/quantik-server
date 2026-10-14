@@ -14,6 +14,7 @@ from service.identity import AuthError, Identity
 from service.google_auth import GoogleProvider, callback, exchange_identity, start_flow
 from service import jobs
 from service.models import AnalysisReport, Job, QuotaBucket, Reservation
+from service.reports import ReportResult
 from service.settings import Settings
 
 
@@ -230,7 +231,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         db.commit()
         return job_response(db, job)
 
-    @app.get("/api/v1/reports/{report_id}")
+    @app.get("/api/v1/reports/{report_id}", response_model=ReportResult)
     def report(report_id: str, account=Depends(user), db=Depends(db_session)):
         report = db.scalar(select(AnalysisReport).where(AnalysisReport.id == report_id,
             AnalysisReport.account_id == account.id))
