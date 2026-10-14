@@ -1,6 +1,7 @@
 import argparse
 import os
 from pathlib import Path
+from datetime import date
 
 from alembic import command
 from alembic.config import Config
@@ -15,7 +16,10 @@ from service.settings import Settings
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="quantik")
-    parser.add_argument("command", choices=["migrate", "generate-keys", "seed-admin"])
+    parser.add_argument("command", choices=["migrate", "generate-keys", "seed-admin", "ingest-market"])
+    parser.add_argument("--target-session", type=date.fromisoformat)
+    parser.add_argument("--start", type=date.fromisoformat, default=date(2021, 1, 1))
+    parser.add_argument("--symbol", action="append")
     args = parser.parse_args()
     load_dotenv()
     settings = Settings()
@@ -36,6 +40,19 @@ def main() -> None:
             file.write(key.public_key().public_bytes(serialization.Encoding.PEM,
                 serialization.PublicFormat.SubjectPublicKeyInfo))
         print("JWT keys generated; restrict private-key file access before deployment")
+    elif args.command == "ingest-market":
+        if not args.target_session:
+            parser.error("ingest-market requires --target-session YYYY-MM-DD")
+        from service.ingestion import ingest_market
+        from service.market_data import DataError
+        try:
+            result = ingest_market(settings, args.start, args.target_session, args.symbol)
+        except DataError as exc:
+            print(f"Ingestion stopped: {exc.code}")
+            raise SystemExit(1) from None
+        print(result)
+        if result["manifest_id"] is None:
+            raise SystemExit(1)
     else:
         username = os.environ.get("QUANTIK_ADMIN_USERNAME", "admin")
         password = os.environ.get("QUANTIK_ADMIN_PASSWORD", "")

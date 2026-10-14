@@ -70,3 +70,33 @@ Jobs core đã kiểm tra request lặp/conflict, ownership, active limit, cance
 incomplete report rejection, settlement và kỳ quota gốc. Chưa có numerical worker hoặc RabbitMQ dispatcher;
 jobs tạo local sẽ nằm trong queue cho đến khi thành phần đó hoàn thành. Quota chưa tự cấp trước billing/admin grants.
 PostgreSQL concurrency/load vẫn cần evidence riêng trước mở beta.
+
+## Market data / Vnstock v5
+
+```powershell
+# Gói v5 nằm ở kho riêng; PyPI chỉ có v4. Không cài vnai/onboarding scripts.
+python -m pip install --no-deps --index-url https://vnstocks.com/api/packages vnstock==5.0.1
+python -m pip install -e './backend[market,quant,dev]' --extra-index-url https://vnstocks.com/api/packages
+quantik migrate
+# Chạy khi slot thiết bị Vnstock đã được cấp. target-session phải là phiên đã hoàn tất.
+quantik ingest-market --target-session 2026-10-14
+# Chỉ fetch thử một mã + VNINDEX; không publish manifest toàn sàn nếu thiếu coverage.
+quantik ingest-market --target-session 2026-10-14 --symbol FPT
+python -m pytest backend/tests/test_market_data.py -q
+```
+
+Adapter pin v5.0.1, equity nguồn VCI và index nguồn KBS; theo
+[contract Market v5](https://www.vnstocks.com/docs/vnstock/thi-truong-market), equity giá nghìn VND
+được chuyển sang VND, index giữ points. Không suy đơn vị từ độ lớn giá. Daily completed của phiên hiện tại
+chỉ nhận từ 16:00 giờ Việt Nam; stale/duplicate/invalid/capped histories bị từ chối.
+
+Mỗi lịch sử/universe/manifest lưu revision bất biến với checksum; correction tạo revision mới.
+Manifest ready yêu cầu VNINDEX đúng phiên và ít nhất 95% universe có history hợp lệ (mặc định beta-1).
+Ingestion lưu từng history sau mỗi mã để tiếp tục sau lỗi; không publish partial dưới tên hoàn chỉnh.
+Corporate-action adjustment chưa có evidence live nên metadata cảnh báo rõ, chưa dùng để publish model.
+DB provider gate áp dụng rolling windows minute/hour/day/31-day từ limits tài khoản đã verify;
+cooldown chia sẻ giữa workers. PostgreSQL contention/provider live cần kiểm chứng riêng.
+
+Provider v5 lưu credential mã hóa theo cơ chế native ngoài repo; không ghi AI skills/instructions vào workspace.
+Lần thử login thật trả VNSTOCK_AUTH_DEVICE_LIMIT. Theo người dùng, integration live đang chờ cấp slot,
+không tự retry login trong lúc chờ. Test normalization/manifest/limiter dùng fixtures, không thay live evidence.

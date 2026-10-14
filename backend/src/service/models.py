@@ -144,3 +144,46 @@ class AnalysisReport(Base):
     job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), unique=True)
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
     payload: Mapped[dict] = mapped_column(JSON)
+
+
+class HistoryRevision(Base):
+    __tablename__ = "history_revisions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    checksum: Mapped[str] = mapped_column(String(64), unique=True)
+    symbol: Mapped[str] = mapped_column(String(16), index=True)
+    target_session: Mapped[date] = mapped_column(Date)
+    input_mode: Mapped[str] = mapped_column(String(24))
+    payload: Mapped[dict] = mapped_column(JSON)
+
+
+class UniverseVersion(Base):
+    __tablename__ = "universe_versions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    checksum: Mapped[str] = mapped_column(String(64), unique=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[int] = mapped_column(Integer)
+
+
+class DataManifest(Base):
+    __tablename__ = "data_manifests"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    checksum: Mapped[str] = mapped_column(String(64), unique=True)
+    universe_id: Mapped[str] = mapped_column(ForeignKey("universe_versions.id"))
+    target_session: Mapped[date] = mapped_column(Date, index=True)
+    input_mode: Mapped[str] = mapped_column(String(24))
+    histories: Mapped[dict] = mapped_column(JSON)
+    coverage: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[int] = mapped_column(Integer)
+
+
+class ProviderGate(Base):
+    __tablename__ = "provider_gates"
+    name: Mapped[str] = mapped_column(String(100), primary_key=True)
+    cooldown_until: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class ProviderCall(Base):
+    __tablename__ = "provider_calls"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    provider: Mapped[str] = mapped_column(ForeignKey("provider_gates.name"), index=True)
+    occurred_at: Mapped[int] = mapped_column(Integer, index=True)

@@ -45,3 +45,18 @@ Gate nested fields/numerical parity chưa đạt; sẽ siết theo output invent
 API uvicorn local khởi động thành công; health/live, health/ready, login admin và admin/me trả HTTP 200
 với cấu hình thật trong .env; logout hoàn tất. Hai kiểm tra identity và một kiểm tra jobs core đã đạt.
 Không build image, tạo container hay volume Docker. Chưa có live Google consent, SePay/Vnstock hoặc VPS evidence.
+
+## Thành phần market-data
+
+Đã cài và pin Vnstock 5.0.1 theo kho chính thức; không dùng bootstrap v4/vnai hoặc tải skill markdown.
+Thử login thật gặp VNSTOCK_AUTH_DEVICE_LIMIT; người dùng yêu cầu chờ slot vì người phụ trách đang nghỉ.
+Không retry login đến khi có cập nhật. Đây chỉ chặn provider live/backfill/model evidence, không dừng coding.
+
+Adapter và ingest CLI có unit/time/schema validation, minimum history, cap detection, immutable revisions,
+versioned universe/manifest và provider rolling-window gate/cooldown dùng chung qua DB.
+Agent chọn 95% universe history-ready + VNINDEX đúng phiên làm ngưỡng manifest beta; exclusions explicit.
+V5 Market docs xác nhận equity nghìn VND, index points; adjustment giữ UNVERIFIED đến khi live contract đạt.
+History revisions hiện lưu payload nguyên chuỗi để bắt đầu pipeline; trước tải lớn cần đo dung lượng và cân nhắc
+chuyển bars sang storage chuyên dụng, giữ nguyên revision/manifest contracts.
+Test local đã đạt units, provisional/completed readiness, bad bars, caps, correction, coverage,
+mixed-version rejection và shared budget across sessions. Chưa có provider live hay multi-worker PG evidence.

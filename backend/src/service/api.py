@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select, text
 from datetime import date
 
-from service.db import make_engine, session_factory
+from service.db import SCHEMA_REVISION, make_engine, session_factory
 from service.identity import AuthError, Identity
 from service.google_auth import GoogleProvider, callback, exchange_identity, start_flow
 from service import jobs
@@ -115,7 +115,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def ready(db=Depends(db_session)):
         try:
             revision = db.scalar(text("SELECT version_num FROM alembic_version"))
-            if revision != "0003":
+            if revision != SCHEMA_REVISION:
                 raise ValueError("Migration required")
         except Exception:
             return JSONResponse(status_code=503, content={"status": "not_ready", "reason": "DATABASE_SCHEMA"})
