@@ -10,12 +10,17 @@ from sqlalchemy import text
 
 from service.db import make_engine, session_factory
 from service.identity import AuthError, Identity
+from service.google_auth import GoogleProvider, callback, exchange_identity, start_flow
 from service.settings import Settings
 
 
 class AdminLogin(BaseModel):
     username: str = Field(min_length=1, max_length=255)
     password: str = Field(min_length=1, max_length=1024)
+
+
+class AuthExchange(BaseModel):
+    code: str = Field(min_length=20, max_length=128)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -26,7 +31,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.identity = Identity(settings)
+        app.state.google = GoogleProvider(settings)
         yield
+        app.state.google.close()
         engine.dispose()
 
     app = FastAPI(title="Quantik API", version="0.1.0", lifespan=lifespan)
@@ -87,7 +94,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def ready(db=Depends(db_session)):
         try:
             revision = db.scalar(text("SELECT version_num FROM alembic_version"))
-            if revision != "0001":
+            if revision != "0002":
                 raise ValueError("Migration required")
         except Exception:
             return JSONResponse(status_code=503, content={"status": "not_ready", "reason": "DATABASE_SCHEMA"})
@@ -119,5 +126,53 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/v1/admin/me")
     def me(account=Depends(admin)):
         return {"id": account.id, "username": account.username, "role": account.role}
+
+    def user(request: Request, credentials: HTTPAuthorizationCredentials | None = Depends(bearer), db=Depends(db_session)):
+        if not credentials:
+            raise AuthError()
+        return request.app.state.identity.authenticate(db, credentials.credentials, "user")
+
+    @app.get("/api/v1/auth/google/start")
+    def google_start(response: Response, db=Depends(db_session)):
+        url, browser = start_flow(db, settings)
+        response.set_cookie("quantik_oauth_browser", browser, httponly=True,
+            secure=settings.environment == "production", samesite="lax", path="/api/v1/auth", max_age=600)
+        return {"authorization_url": url}
+
+    @app.get("/api/v1/auth/google/callback")
+    def google_callback(request: Request, state: str, code: str, db=Depends(db_session)):
+        exchange = callback(db, request.app.state.google, state,
+            request.cookies.get("quantik_oauth_browser", ""), code)
+        # The browser receives a short-lived exchange code in the response body.
+        # FE performs a same-origin POST; JWT/refresh tokens never appear in URLs.
+        return {"exchange_code": exchange, "expires_in": 60}
+
+    @app.post("/api/v1/auth/exchange")
+    def google_exchange(body: AuthExchange, request: Request, response: Response, db=Depends(db_session)):
+        require_origin(request)
+        account = exchange_identity(db, body.code, request.cookies.get("quantik_oauth_browser", ""))
+        result = request.app.state.identity.new_session(db, account)
+        audit_result = tokens(response, result, "user")
+        db.commit()
+        response.delete_cookie("quantik_oauth_browser", path="/api/v1/auth")
+        return audit_result
+
+    @app.post("/api/v1/auth/refresh")
+    def user_refresh(request: Request, response: Response, db=Depends(db_session)):
+        require_origin(request)
+        return tokens(response, request.app.state.identity.refresh(db,
+            request.cookies.get(cookie_name("user"), ""), "user"), "user")
+
+    @app.post("/api/v1/auth/logout", status_code=204)
+    def user_logout(request: Request, db=Depends(db_session)):
+        require_origin(request)
+        request.app.state.identity.logout(db, request.cookies.get(cookie_name("user"), ""))
+        response = Response(status_code=204)
+        response.delete_cookie(cookie_name("user"), path=cookie_path("user"))
+        return response
+
+    @app.get("/api/v1/me")
+    def profile(account=Depends(user)):
+        return {"id": account.id, "role": account.role}
 
     return app

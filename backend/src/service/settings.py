@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     jwt_issuer: str = "quantik"
     access_seconds: int = 900
     refresh_seconds: int = 604800
+    google_client_id: str = Field(default="", validation_alias="GOOGLE_CLIENT_ID")
+    google_client_secret: SecretStr = Field(default=SecretStr(""), validation_alias="GOOGLE_CLIENT_SECRET")
 
     @model_validator(mode="after")
     def production_checks(self) -> "Settings":

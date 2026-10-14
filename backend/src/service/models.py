@@ -53,3 +53,15 @@ class AuditEvent(Base):
     action: Mapped[str] = mapped_column(String(100), index=True)
     occurred_at: Mapped[int] = mapped_column(Integer)
     details: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class OAuthFlow(Base):
+    __tablename__ = "oauth_flows"
+    state_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    browser_hash: Mapped[str] = mapped_column(String(64))
+    nonce: Mapped[str] = mapped_column(String(128))
+    verifier: Mapped[str] = mapped_column(String(128))
+    expires_at: Mapped[int] = mapped_column(Integer)
+    stage: Mapped[str] = mapped_column(String(16), default="STARTED")
+    account_id: Mapped[str | None] = mapped_column(ForeignKey("accounts.id"))
+    exchange_hash: Mapped[str | None] = mapped_column(String(64), unique=True)

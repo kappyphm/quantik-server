@@ -20,3 +20,10 @@ live được kiểm chứng. Các ngưỡng khoa học chỉ publish khi có va
 DB session revocation, durable login throttles, Origin check và audit. README có lệnh install/run/test thực tế.
 Secrets giữ ngoài Git; chỉ kiểm tra tên biến và có/không có giá trị, không in giá trị.
 Các phần Google login, customer jobs, billing, provider và scientific pipelines chưa được nghiệm thu.
+
+## Thành phần Google identity
+
+Đã thêm browser-bound state/nonce/PKCE, verify Google OIDC, nhận diện bằng sub, one-time exchange,
+user refresh/logout và role/audience isolation. Migration 0002 lưu OAuth flow dùng chung giữa replicas.
+Provider credentials có trong .env; chưa chứng minh Google consent/redirect hoạt động live.
+Admin local đã seed thành công sau khi người dùng cập nhật mật khẩu đủ độ dài.
