@@ -16,10 +16,12 @@ from service.settings import Settings
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="quantik")
-    parser.add_argument("command", choices=["migrate", "generate-keys", "seed-admin", "ingest-market"])
+    parser.add_argument("command", choices=["migrate", "generate-keys", "seed-admin", "ingest-market", "train-model", "publish-model"])
     parser.add_argument("--target-session", type=date.fromisoformat)
     parser.add_argument("--start", type=date.fromisoformat, default=date(2021, 1, 1))
     parser.add_argument("--symbol", action="append")
+    parser.add_argument("--manifest-id")
+    parser.add_argument("--model-id")
     args = parser.parse_args()
     load_dotenv()
     settings = Settings()
@@ -53,6 +55,33 @@ def main() -> None:
         print(result)
         if result["manifest_id"] is None:
             raise SystemExit(1)
+    elif args.command in {"train-model", "publish-model"}:
+        from dataclasses import replace
+        from service.model_lifecycle import promote_model, train_manifest
+        from service.market_data import DataError
+        from service.quant.configuration import QuantConfig
+        engine = make_engine(settings.database_url)
+        sessions = session_factory(engine)
+        try:
+            if args.command == "train-model":
+                if not args.manifest_id:
+                    parser.error("train-model requires --manifest-id")
+                model = train_manifest(sessions, args.manifest_id, replace(QuantConfig(), PRICE_INPUT_UNIT="VND"))
+                print({"model_id": model.id, "status": model.status, "validation": model.artifact["validation"]})
+            else:
+                if not args.model_id:
+                    parser.error("publish-model requires --model-id")
+                with sessions() as db, db.begin():
+                    model = promote_model(db, args.model_id)
+                print({"model_id": model.id, "status": model.status})
+        except DataError as exc:
+            print(f"Model lifecycle stopped: {exc.code}")
+            raise SystemExit(1) from None
+        except ValueError:
+            print("Training stopped: invalid or insufficient input history")
+            raise SystemExit(1) from None
+        finally:
+            engine.dispose()
     else:
         username = os.environ.get("QUANTIK_ADMIN_USERNAME", "admin")
         password = os.environ.get("QUANTIK_ADMIN_PASSWORD", "")

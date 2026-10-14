@@ -90,4 +90,5 @@ class VnstockProvider:
         frame = self.call(lambda: asset.ohlcv(start=start.isoformat(), end=target_session.isoformat(),
             interval="1D", source=source, floating=None))
         return normalize_history(frame, symbol=symbol, kind=kind, source=source, target_session=target_session,
-            observed_at=datetime.now(timezone.utc), input_mode=input_mode, minimum_bars=minimum_bars)
+            observed_at=datetime.now(timezone.utc), input_mode=input_mode, minimum_bars=minimum_bars,
+            provenance="LIVE_UNVERIFIED")

@@ -187,3 +187,23 @@ class ProviderCall(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     provider: Mapped[str] = mapped_column(ForeignKey("provider_gates.name"), index=True)
     occurred_at: Mapped[int] = mapped_column(Integer, index=True)
+
+
+class ModelVersion(Base):
+    __tablename__ = "model_versions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    checksum: Mapped[str] = mapped_column(String(64), unique=True)
+    manifest_id: Mapped[str] = mapped_column(ForeignKey("data_manifests.id"))
+    cutoff_session: Mapped[date] = mapped_column(Date)
+    created_at: Mapped[int] = mapped_column(Integer)
+    published_at: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(20))
+    config: Mapped[dict] = mapped_column(JSON)
+    artifact: Mapped[dict] = mapped_column(JSON)
+    evidence: Mapped[dict] = mapped_column(JSON)
+
+
+class PublishedModel(Base):
+    __tablename__ = "published_models"
+    name: Mapped[str] = mapped_column(String(100), primary_key=True)
+    model_id: Mapped[str] = mapped_column(ForeignKey("model_versions.id"))

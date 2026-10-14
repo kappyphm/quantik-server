@@ -46,7 +46,8 @@ class DailyHistory:
 
 def normalize_history(frame: pd.DataFrame, *, symbol: str, kind: Literal["EQUITY", "INDEX"],
                       source: str, target_session: date, observed_at: datetime,
-                      input_mode: InputMode = "COMPLETED_DAILY", minimum_bars: int = 120) -> DailyHistory:
+                      input_mode: InputMode = "COMPLETED_DAILY", minimum_bars: int = 120,
+                      provenance: Literal["FIXTURE", "LIVE_UNVERIFIED", "LIVE_VALIDATED"] = "FIXTURE") -> DailyHistory:
     if observed_at.tzinfo is None:
         raise DataError("OBSERVED_AT_REQUIRES_TIMEZONE")
     local = observed_at.astimezone(VN_TIMEZONE)
@@ -103,6 +104,7 @@ def normalize_history(frame: pd.DataFrame, *, symbol: str, kind: Literal["EQUITY
     bars = [{"session": session.date().isoformat(), **{key: float(value) for key, value in row.items()}}
         for session, row in df.iterrows()]
     metadata = {"provider": "vnstock", "provider_version": "5.0.1", "source": source,
+        "provenance": provenance,
         "kind": kind, "price_unit": "VND" if kind == "EQUITY" else "POINTS", "volume_unit": "SHARES",
         "source_price_unit": "THOUSAND_VND" if kind == "EQUITY" else "POINTS",
         "adjustment": "PROVIDER_ADJUSTMENT_UNVERIFIED", "target_session": target_session.isoformat(),

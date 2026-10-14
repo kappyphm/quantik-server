@@ -125,3 +125,24 @@ norm.cdf callable với cùng fitted normal CDF. Numerical parity test đối ch
 đã chủ động bỏ và đổi callable này), kiểm tra distribution/statistics/Monte Carlo/cost/stops và config restoration.
 Full baseline smoke synthetic 252 bars đã chạy khoảng 18.44 giây, ARIMA/GARCH/HMM/simulation không có lỗi.
 Chưa có scientific validation trên dữ liệu live, bootstrap model hoặc customer report hoàn chỉnh.
+
+## Weekly model lifecycle
+
+```powershell
+quantik train-model --manifest-id <ready-completed-manifest-id>
+quantik publish-model --model-id <candidate-id>
+python -m pytest backend/tests/test_model_training.py -q
+```
+
+Training chạy riêng với immutable completed manifest và sector membership rõ. Mature labels theo horizon,
+holdout 40 sessions, purge + embargo mỗi cái bằng horizon, tối thiểu 400 train rows/5 symbols và
+150 validation rows. Beta policy yêu cầu ít nhất 20 ngày rank IC hợp lệ, rank IC ≥0.02 và RMSE absolute/alpha
+không tệ hơn zero-return baseline. Tham số model giữ n_estimators=180 và công thức feature từ prototype.
+Incumbent được so trên cùng holdout khi có; nếu training cutoff incumbent overlap holdout thì metrics đó
+chỉ diagnostic, không được dùng làm evidence out-of-sample. Refit trên mature rows sau khi khóa metrics.
+
+Artifacts dùng LightGBM text (không pickle), config/checksum/manifest/cutoff/evidence lưu DB shared.
+Publication kiểm tra checksum, validation và live-data evidence, cập nhật pointer atomic; candidate lỗi
+giữ model đang publish. Fixture mặc định có provenance FIXTURE; provider fetch ghi LIVE_UNVERIFIED.
+Chưa có đường tự đổi UNVERIFIED thành VERIFIED, nên chưa publish model từ dữ liệu chưa kiểm định.
+Test temporal training/inference/revisions và fixture publication rejection đã đạt; lịch weekly chưa được nối scheduler.

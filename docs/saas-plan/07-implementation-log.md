@@ -77,3 +77,17 @@ một lời gọi sang stats.norm.cdf callable, giữ cùng CDF/params, ghi comp
 Parity AST của 22 classes sau transformations và numerical parity critical methods đã đạt; config restoration đạt.
 Full baseline synthetic 252 bars: 25 output groups, 18.44 giây, component_errors rỗng;
 ARIMA/GARCH/HMM/simulation outputs đầy đủ và không có error. Đây không thay live scientific/model evidence.
+
+## Thành phần model lifecycle
+
+Train panel dùng features gốc, toàn eligible universe có sector/index/same-session; mature labels explicit.
+Temporal holdout 40 sessions, purge/embargo bằng horizon; min 400 train rows, 5 symbols, 150 validation rows.
+Agent chọn temporal-beta-1: ≥20 valid rank days, rank IC≥0.02, absolute/alpha RMSE≤zero-return baseline.
+Đây là ngưỡng beta cần evidence thực nghiệm trước mở khách, không tuyên bố model sinh lợi.
+So incumbent cùng holdout; overlap training cutoff được ghi diagnostic-only. Refit chỉ sau khóa metrics.
+
+ModelVersion/PublishedModel lưu text boosters, config, manifest/checksum/cutoff/evidence. Publication atomic,
+checksum gate, validation gate, live-data gate, không ghi đè model cutoff mới bằng model cũ.
+Model fixture không publish; provenance phân biệt FIXTURE/LIVE_UNVERIFIED/LIVE_VALIDATED.
+Test synthetic 6 symbols/400 bars đạt temporal separation, deterministic inference/rank ordering,
+stale-symbol exclusion, artifact idempotency và fixture promotion rejection. Không có bootstrap live model.
