@@ -16,7 +16,7 @@ from service.settings import Settings
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="quantik")
-    parser.add_argument("command", choices=["migrate", "generate-keys", "seed-admin", "ingest-market", "train-model", "publish-model", "build-snapshot", "worker", "dispatcher", "dependencies", "reconciler", "recover-delivery"])
+    parser.add_argument("command", choices=["migrate", "generate-keys", "seed-admin", "ingest-market", "train-model", "publish-model", "build-snapshot", "worker", "dispatcher", "dependencies", "reconciler", "recover-delivery", "screen-market"])
     parser.add_argument("--target-session", type=date.fromisoformat)
     parser.add_argument("--start", type=date.fromisoformat, default=date(2021, 1, 1))
     parser.add_argument("--symbol", action="append")
@@ -24,6 +24,9 @@ def main() -> None:
     parser.add_argument("--model-id")
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--transport", choices=["amqp", "local"], default="amqp")
+    parser.add_argument("--slot", choices=["AM", "PM"])
+    parser.add_argument("--input-mode", choices=["COMPLETED_DAILY", "PROVISIONAL_DAILY"], default="COMPLETED_DAILY")
+    parser.add_argument("--minimum-bars", type=int, default=1)
     args = parser.parse_args()
     load_dotenv()
     settings = Settings()
@@ -53,13 +56,26 @@ def main() -> None:
         from service.ingestion import ingest_market
         from service.market_data import DataError
         try:
-            result = ingest_market(settings, args.start, args.target_session, args.symbol)
+            result = ingest_market(settings, args.start, args.target_session, args.symbol, args.input_mode, args.minimum_bars)
         except DataError as exc:
             print(f"Ingestion stopped: {exc.code}")
             raise SystemExit(1) from None
         print(result)
         if result["manifest_id"] is None:
             raise SystemExit(1)
+    elif args.command == "screen-market":
+        if not args.target_session or not args.slot:
+            parser.error("screen-market requires --target-session YYYY-MM-DD and --slot AM|PM")
+        from service.screening import run_screening
+        engine = make_engine(settings.database_url)
+        try:
+            run = run_screening(session_factory(engine), args.target_session, args.slot,
+                manifest_id=args.manifest_id, allow_fixture=settings.allow_fixture_analysis)
+            print({"run_id": run.id, "status": run.status, "reason": run.reason})
+            if run.status == "FAILED":
+                raise SystemExit(1)
+        finally:
+            engine.dispose()
     elif args.command in {"train-model", "publish-model", "build-snapshot"}:
         from dataclasses import replace
         from service.model_lifecycle import promote_model, train_manifest

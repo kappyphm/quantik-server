@@ -1,7 +1,9 @@
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, Header, Request, Response
+from fastapi import Depends, FastAPI, Header, Query, Request, Response
+from typing import Literal
+import time
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -15,6 +17,8 @@ from service.google_auth import GoogleProvider, callback, exchange_identity, sta
 from service import jobs
 from service.models import AnalysisReport, Job, QuotaBucket, Reservation
 from service.reports import ReportResult
+from service.models import PublishedScreening, ScreeningResult, ScreeningRun, UniverseVersion
+from service.screening_contracts import ScreeningPage
 from service.settings import Settings
 
 
@@ -246,5 +250,80 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "valid_from": b.valid_from, "valid_until": b.valid_until}
             for b in db.scalars(select(QuotaBucket).where(QuotaBucket.account_id == account.id)
                 .order_by(QuotaBucket.valid_from.desc()).limit(50))]}
+
+    def screening_header(run):
+        return {"id": run.id, "target_session": run.target_session.isoformat(), "slot": run.slot,
+            "status": run.status, "reason": run.reason, "manifest_id": run.manifest_id,
+            "published_at": run.published_at}
+
+    def require_screening_source(run):
+        if not settings.allow_fixture_analysis and run.summary.get("source_mode") != "LIVE_VALIDATED":
+            raise jobs.JobError("SCREENING_LIVE_DATA_REQUIRED", 503)
+
+    @app.get("/api/v1/screenings/latest")
+    def screening_latest(slot: Literal["ALL", "AM", "PM"] = "ALL", account=Depends(user), db=Depends(db_session)):
+        query = select(ScreeningRun)
+        if slot != "ALL":
+            query = query.where(ScreeningRun.slot == slot)
+        attempt = db.scalar(query.order_by(ScreeningRun.target_session.desc(), ScreeningRun.slot.desc()).limit(1))
+        pointer = db.get(PublishedScreening, slot)
+        if not pointer:
+            return JSONResponse(status_code=503, content={"code": "SCREENING_NOT_READY",
+                "latest_attempt": screening_header(attempt) if attempt else None})
+        run = db.get(ScreeningRun, pointer.run_id)
+        require_screening_source(run)
+        reasons = []
+        if attempt and (attempt.target_session, attempt.slot) >= (run.target_session, run.slot) and attempt.status != "READY":
+            reasons.append("LATEST_RUN_UNAVAILABLE")
+        if int(time.time()) - run.published_at > 36*3600:
+            reasons.append("PUBLICATION_AGE")
+        return {**screening_header(run), "summary": run.summary, "stale": bool(reasons), "stale_reasons": reasons,
+            "latest_attempt": screening_header(attempt) if attempt else None}
+
+    @app.get("/api/v1/screenings/{run_id}/results", response_model=ScreeningPage)
+    def screening_results(run_id: str, group: Literal["ALL", "OVERALL", "STRONG", "ACCUMULATION", "DISTRIBUTION"] = "ALL",
+                          cursor: str | None = None, limit: int = Query(default=50, ge=1, le=200),
+                          account=Depends(user), db=Depends(db_session)):
+        run = db.get(ScreeningRun, run_id)
+        if not run:
+            raise jobs.JobError("NOT_FOUND", 404)
+        if run.status != "READY":
+            raise jobs.JobError("SCREENING_RUN_NOT_READY", 409)
+        require_screening_source(run)
+        columns = {"OVERALL": ScreeningResult.overall_rank, "STRONG": ScreeningResult.strong_rank,
+            "ACCUMULATION": ScreeningResult.accumulation_rank, "DISTRIBUTION": ScreeningResult.distribution_rank}
+        query = select(ScreeningResult).where(ScreeningResult.run_id == run_id)
+        if group == "ALL":
+            if cursor:
+                query = query.where(ScreeningResult.symbol > cursor)
+            query = query.order_by(ScreeningResult.symbol)
+        else:
+            rank = columns[group]
+            query = query.where(rank.is_not(None)).order_by(rank)
+            if cursor:
+                if not cursor.isdigit():
+                    raise jobs.JobError("INVALID_CURSOR", 422)
+                query = query.where(rank > int(cursor))
+        rows = list(db.scalars(query.limit(limit+1)))
+        items = [{**row.payload, "ranks": {"OVERALL": row.overall_rank, "STRONG": row.strong_rank,
+            "ACCUMULATION": row.accumulation_rank, "DISTRIBUTION": row.distribution_rank}} for row in rows[:limit]]
+        next_cursor = None
+        if len(rows) > limit:
+            next_cursor = rows[limit-1].symbol if group == "ALL" else str(getattr(rows[limit-1], group.lower()+"_rank"))
+        return {"run_id": run_id, "group": group, "items": items, "next_cursor": next_cursor}
+
+    @app.get("/api/v1/instruments")
+    def instruments(cursor: str | None = None, exchange: Literal["HOSE", "HNX", "UPCOM"] | None = None,
+                    limit: int = Query(default=100, ge=1, le=500), account=Depends(user), db=Depends(db_session)):
+        query = select(UniverseVersion)
+        if not settings.allow_fixture_analysis:
+            query = query.where(UniverseVersion.payload["provenance"].as_string() == "LIVE_VALIDATED")
+        reference = db.scalar(query.order_by(UniverseVersion.created_at.desc(), UniverseVersion.id).limit(1))
+        if not reference:
+            raise jobs.JobError("INSTRUMENTS_NOT_READY", 503)
+        selected = [(symbol, meta) for symbol, meta in sorted(reference.payload["members"].items())
+            if (not cursor or symbol > cursor) and (not exchange or meta["exchange"] == exchange)]
+        return {"universe_version": reference.id, "items": [{"symbol": s, **meta} for s, meta in selected[:limit]],
+            "next_cursor": selected[limit-1][0] if len(selected) > limit else None}
 
     return app

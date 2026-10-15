@@ -211,3 +211,31 @@ Settings validation không in raw input/secrets. Không tự chuyển sang local
 Focused fixture E2E đã đạt API admission → confirmed outbox → worker → report → quota; confirm loss/redelivery
 không nhân report/lượt; strict inputs wait không đánh dấu compute; shared dependency, cancel và account
 revocation sau compute xử lý đúng. Đây chưa phải bằng chứng broker/PostgreSQL thật, load hoặc live scientific gate.
+
+## Screening
+
+```powershell
+quantik migrate
+# Chạy khi provider đã được cấp slot/xác minh; AM chỉ lấy observations trong lunch window.
+quantik ingest-market --target-session 2026-10-15 --input-mode PROVISIONAL_DAILY
+quantik screen-market --target-session 2026-10-15 --slot AM
+# PM trigger 15:00, chờ completed data từ 16:00:
+quantik ingest-market --target-session 2026-10-15
+quantik screen-market --target-session 2026-10-15 --slot PM
+python -m pytest backend/tests/test_screening.py -q
+```
+
+21 tiêu chí/narrative/VNINDEX context giữ từ prototype, thêm tri-state availability và requirements theo
+từng criterion. Mọi universe member có all-results, kể cả short history/liquidity rejection; group rankings,
+overall Top 70 và coverage explicit. AM raw volume với prior-completed baseline, không projection.
+Policy/window/readiness/deadline tại [09-screening-policy.md](docs/saas-plan/09-screening-policy.md).
+
+API user: GET /instruments; GET /screenings/latest?slot=ALL|AM|PM;
+GET /screenings/{run_id}/results?group=ALL|OVERALL|STRONG|ACCUMULATION|DISTRIBUTION&limit=50&cursor=...
+ALL cursor theo symbol; ranking cursor theo rank. OpenAPI có ScreeningPage/ScreeningItem/ScreeningGroup/CriterionRecord.
+Latest trả published run + latest attempt + stale reasons; failed run không thay published pointer.
+Universe và data fixture không được phục vụ qua API mặc định; source validation vẫn chờ live credentials.
+
+Focused checks đạt boolean parity completed inputs với prototype, missing/short/index availability,
+provisional denominator, stable ranks, all-results, PM/AM publication, deadline giữ latest và authenticated
+API pagination. Chưa có calendar/scheduler automation hoặc live full-universe acceptance.

@@ -12,7 +12,8 @@ from service.vnstock_provider import VnstockProvider
 
 
 def ingest_market(settings: Settings, start: date, target_session: date,
-                  selected_symbols: list[str] | None = None) -> dict:
+                  selected_symbols: list[str] | None = None, input_mode: str = "COMPLETED_DAILY",
+                  minimum_bars: int = 1) -> dict:
     if start > target_session:
         raise DataError("INVALID_DATE_WINDOW")
     key = os.environ.get("VNSTOCK_API_KEY", "")
@@ -33,7 +34,7 @@ def ingest_market(settings: Settings, start: date, target_session: date,
         for symbol in symbols:
             try:
                 history = provider.history(symbol, start, target_session,
-                    kind="INDEX" if symbol == "VNINDEX" else "EQUITY")
+                    kind="INDEX" if symbol == "VNINDEX" else "EQUITY", input_mode=input_mode, minimum_bars=minimum_bars)
                 with sessions() as db, db.begin():
                     record = save_history(db, history)
                 print(f"Ingested {symbol}: {len(history.payload['bars'])} bars, revision {record.id}")
@@ -45,7 +46,7 @@ def ingest_market(settings: Settings, start: date, target_session: date,
         with sessions() as db, db.begin():
             histories = {}
             for row in db.scalars(select(HistoryRevision).where(HistoryRevision.target_session == target_session,
-                HistoryRevision.input_mode == "COMPLETED_DAILY")):
+                HistoryRevision.input_mode == input_mode)):
                 if row.symbol not in members and row.symbol != "VNINDEX":
                     continue
                 previous = histories.get(row.symbol)
@@ -53,7 +54,7 @@ def ingest_market(settings: Settings, start: date, target_session: date,
                     histories[row.symbol] = row
             try:
                 manifest = publish_manifest(db, universe, histories, target_session=target_session,
-                    input_mode="COMPLETED_DAILY")
+                    input_mode=input_mode)
                 manifest_id = manifest.id
             except DataError as exc:
                 manifest_id = None

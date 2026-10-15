@@ -122,6 +122,7 @@ def normalize_history(frame: pd.DataFrame, *, symbol: str, kind: Literal["EQUITY
         "provenance": provenance,
         "kind": kind, "price_unit": "VND" if kind == "EQUITY" else "POINTS", "volume_unit": "SHARES",
         "source_price_unit": "THOUSAND_VND" if kind == "EQUITY" else "POINTS",
+        "minimum_bars_requested": minimum_bars,
         "adjustment": "PROVIDER_ADJUSTMENT_UNVERIFIED", "target_session": target_session.isoformat(),
         "input_mode": input_mode, "observed_at": observed_at.astimezone(ZoneInfo("UTC")).isoformat(),
         "warnings": ["CORPORATE_ACTION_ADJUSTMENT_UNVERIFIED"]}
@@ -145,7 +146,7 @@ def normalize_universe(frame: pd.DataFrame) -> dict:
         members[symbol] = {"exchange": exchange, "sector": None if pd.isna(sector) else str(sector)}
     if not members:
         raise DataError("EMPTY_UNIVERSE")
-    return {"version": "universe-1", "members": dict(sorted(members.items()))}
+    return {"version": "universe-1", "members": dict(sorted(members.items())), "provenance": "FIXTURE"}
 
 
 def persist_immutable(db: Session, model, identity: dict, **fields):

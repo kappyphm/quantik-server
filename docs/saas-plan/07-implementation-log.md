@@ -132,3 +132,20 @@ Fixture E2E bổ sung vào snapshot check đã đạt: API→outbox→worker→1
 redelivery chỉ một report/consume; strict-data wait chưa compute; wake, shared dependencies, cancel release,
 account disabled sau compute chặn completion/release đúng. CLI local worker/reconciler --once chạy thành công;
 control runtime xác nhận không nạp NumPy/Pandas/LightGBM. Chưa chạy broker/container, PG concurrency hay VPS.
+
+## Thành phần screening
+
+Extract pure Feature/Screening/Assessment/MarketAnalyzer + regime adjustment từ crawl_data.py; không provider,
+news hay exporter. 21 criteria giữ threshold/công thức khi inputs đủ, tri-state + minimum bars theo mục 09.
+RS không ffill ngày index thiếu; volume AM raw/prior completed20; projected volume disabled. Fixed denominator,
+coverage/group/overall eligibility, stable symbol tie-break và all-results cho rejected/short symbols.
+
+Run unique target/slot, lease/fencing, readiness>=95% histories + index50bars; AM cutoff/lunch, PM completed16:00,
+deadlines 12:55/17:30. Atomic publication giữ latest khi failed; ALL/AM/PM pointers riêng, published run immutable.
+API user/instruments/latest/results có cursor và typed schemas. Default source gate chặn fixtures;
+universe provenance cũng được đưa vào model live-publication evidence.
+
+Test đạt completed boolean parity, missing/partial availability, raw morning volume, tie/rank ordering,
+PM+AM publication/wait/deadline, giữ rejected/all-results và API auth/pagination. Ingestion nhận short
+histories để screening không áp min120 lên tất cả tiêu chí; quant/model giữ min riêng120. Không gọi lại Vnstock,
+không tạo Docker. Calendar/scheduler, billing/admin và deployment tiếp tục ở các thành phần sau.

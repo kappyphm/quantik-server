@@ -285,3 +285,37 @@ class PublishedSnapshot(Base):
     __tablename__ = "published_snapshots"
     name: Mapped[str] = mapped_column(String(100), primary_key=True)
     snapshot_id: Mapped[str] = mapped_column(ForeignKey("market_snapshots.id"))
+
+
+class ScreeningRun(Base):
+    __tablename__ = "screening_runs"
+    __table_args__ = (UniqueConstraint("target_session", "slot"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    target_session: Mapped[date] = mapped_column(Date)
+    slot: Mapped[str] = mapped_column(String(4))
+    status: Mapped[str] = mapped_column(String(20))
+    manifest_id: Mapped[str | None] = mapped_column(ForeignKey("data_manifests.id"))
+    policy: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[int] = mapped_column(Integer)
+    published_at: Mapped[int | None] = mapped_column(Integer)
+    execution_token: Mapped[str | None] = mapped_column(String(36))
+    lease_until: Mapped[int] = mapped_column(Integer, default=0)
+    reason: Mapped[str | None] = mapped_column(String(100))
+    summary: Mapped[dict | None] = mapped_column(JSON)
+
+
+class ScreeningResult(Base):
+    __tablename__ = "screening_results"
+    run_id: Mapped[str] = mapped_column(ForeignKey("screening_runs.id"), primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(16), primary_key=True)
+    overall_rank: Mapped[int | None] = mapped_column(Integer, index=True)
+    strong_rank: Mapped[int | None] = mapped_column(Integer, index=True)
+    accumulation_rank: Mapped[int | None] = mapped_column(Integer, index=True)
+    distribution_rank: Mapped[int | None] = mapped_column(Integer, index=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+
+
+class PublishedScreening(Base):
+    __tablename__ = "published_screenings"
+    name: Mapped[str] = mapped_column(String(8), primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("screening_runs.id"))

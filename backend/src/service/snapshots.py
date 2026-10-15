@@ -68,7 +68,7 @@ def build_market_snapshot(sessions, manifest_id: str, config: QuantConfig, *, mi
         manifest = db.get(DataManifest, manifest_id)
         if not manifest:
             raise DataError("MANIFEST_NOT_FOUND")
-        data, index, sectors = manifest_frames(db, manifest)
+        data, index, sectors = manifest_frames(db, manifest, config.MIN_HISTORY)
         universe = db.get(UniverseVersion, manifest.universe_id)
         members = universe.payload["members"]
         pointer = db.get(PublishedModel, "weekly-lightgbm")
@@ -111,7 +111,7 @@ def build_market_snapshot(sessions, manifest_id: str, config: QuantConfig, *, mi
                 "engine": ENGINE_VERSION, "config": asdict(config), "evaluation_day": evaluation_day.isoformat()})
             baseline = cached_baseline(sessions, baseline_key, lambda: compute_baseline(symbol, frame,
                 exchange=members[symbol]["exchange"], evaluated_at=evaluation, index_frame=index, config=config))
-            if baseline.get("error") or not baseline.get("stats") or not baseline.get("simulation_risk"):
+            if baseline.get("error") or not baseline.get("stats") or baseline["stats"].get("error") or not baseline.get("simulation_risk"):
                 excluded[symbol] = "BASELINE_UNAVAILABLE"
                 continue
             baselines[symbol] = baseline

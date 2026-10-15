@@ -11,7 +11,7 @@ from service.quant.configuration import QuantConfig
 from service.quant.training import TrainingPolicy, train_artifact
 
 
-def manifest_frames(db, manifest: DataManifest) -> tuple[dict, object, dict]:
+def manifest_frames(db, manifest: DataManifest, minimum_bars: int = 120) -> tuple[dict, object, dict]:
     universe = db.get(UniverseVersion, manifest.universe_id)
     if not universe or manifest.input_mode != "COMPLETED_DAILY":
         raise DataError("MODEL_REQUIRES_COMPLETED_MANIFEST")
@@ -25,10 +25,10 @@ def manifest_frames(db, manifest: DataManifest) -> tuple[dict, object, dict]:
         frame = DailyHistory(symbol, history.target_session, history.input_mode, history.payload).frame()
         if symbol == "VNINDEX":
             index = frame
-        elif universe.payload["members"][symbol].get("sector"):
+        elif universe.payload["members"][symbol].get("sector") and len(frame) >= minimum_bars:
             data[symbol], sectors[symbol] = frame, universe.payload["members"][symbol]["sector"]
-    if index is None:
-        raise DataError("INDEX_NOT_READY")
+    if index is None or len(index) < minimum_bars:
+        raise DataError("INDEX_NOT_READY", True)
     return data, index, sectors
 
 
@@ -36,7 +36,8 @@ def save_candidate(db, manifest: DataManifest, artifact: dict, config: QuantConf
     if artifact["cutoff_session"] != manifest.target_session.isoformat():
         raise DataError("MODEL_CUTOFF_MISMATCH")
     histories = [db.get(HistoryRevision, history_id) for history_id in manifest.histories.values()]
-    source_verified = all(h and h.payload["metadata"].get("provenance") == "LIVE_VALIDATED"
+    reference = db.get(UniverseVersion, manifest.universe_id)
+    source_verified = bool(reference and reference.payload.get("provenance") == "LIVE_VALIDATED") and all(h and h.payload["metadata"].get("provenance") == "LIVE_VALIDATED"
         and h.payload["metadata"].get("adjustment") == "VERIFIED" for h in histories)
     evidence = {"live_data_validated": source_verified, "validation_accepted": artifact["validation"]["accepted"],
         "exclusions": manifest.coverage["excluded"], "manifest_checksum": manifest.checksum}
@@ -83,7 +84,7 @@ def train_manifest(sessions, manifest_id: str, config: QuantConfig, policy: Trai
         manifest = db.get(DataManifest, manifest_id)
         if not manifest:
             raise DataError("MANIFEST_NOT_FOUND")
-        data, index, sectors = manifest_frames(db, manifest)
+        data, index, sectors = manifest_frames(db, manifest, config.MIN_HISTORY)
         pointer = db.get(PublishedModel, "weekly-lightgbm")
         incumbent = db.get(ModelVersion, pointer.model_id) if pointer else None
         incumbent_artifact = incumbent.artifact if incumbent else None

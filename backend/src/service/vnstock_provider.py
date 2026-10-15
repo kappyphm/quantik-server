@@ -79,7 +79,9 @@ class VnstockProvider:
             raise error from None
 
     def universe(self) -> dict:
-        return normalize_universe(self.call(lambda: self.reference.equity.list_by_exchange(source="vci")))
+        result = normalize_universe(self.call(lambda: self.reference.equity.list_by_exchange(source="vci")))
+        result["provenance"] = "LIVE_UNVERIFIED"
+        return result
 
     def history(self, symbol: str, start: date, target_session: date, *, kind: str = "EQUITY",
                 input_mode: str = "COMPLETED_DAILY", minimum_bars: int = 120) -> DailyHistory:
