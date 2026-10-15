@@ -158,8 +158,8 @@ def test_ingestion_resume_preserves_provider_budget(tmp_path, monkeypatch):
     from service import ingestion
     from service.market_data import DailyHistory
     url, engine, sessions = database(tmp_path, monkeypatch)
-    settings = Settings(_env_file=None, environment="test", database_url=url)
     monkeypatch.setenv("VNSTOCK_API_KEY", "fixture-not-a-secret")
+    settings = Settings(_env_file=None, environment="test", database_url=url)
     calls, should_limit = [], [True]
     target, start = date(2026, 10, 15), date(2021, 1, 1)
 

@@ -1,5 +1,4 @@
 """Resumable ingestion; a partial fetch never becomes a ready market manifest."""
-import os
 from types import SimpleNamespace
 from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
@@ -11,6 +10,7 @@ from service.market_data import DataError, checksum, publish_manifest, save_hist
 from service.models import HistoryRevision
 from service.settings import Settings
 from service.vnstock_provider import VnstockProvider
+from service.integrations import read as read_integration
 
 
 def reusable_history(record, start: date, minimum_bars: int) -> bool:
@@ -31,12 +31,15 @@ def ingest_market(settings: Settings, start: date, target_session: date,
                   minimum_bars: int = 1, *, operation_guard=None, resume: bool = False) -> dict:
     if start > target_session:
         raise DataError("INVALID_DATE_WINDOW")
-    key = os.environ.get("VNSTOCK_API_KEY", "")
-    if not key:
-        raise DataError("PROVIDER_API_KEY_MISSING")
     engine = make_engine(settings.database_url)
     sessions = session_factory(engine)
     try:
+        with sessions() as db:
+            values, _ = read_integration(db, "vnstock", settings)
+            key = values["api_key"]
+        if not key:
+            raise DataError("PROVIDER_API_KEY_MISSING")
+
         def guard():
             if operation_guard:
                 with sessions() as db, db.begin():

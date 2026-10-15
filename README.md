@@ -318,3 +318,15 @@ Secrets không đi vào command arguments/manifest; bundle chứa dữ liệu ri
 SQLite và PostgreSQL thật đã kiểm restore; test container đã dọn, không build image/tạo volume.
 Offsite, lịch backup tự động và RPO/RTO còn chưa nghiệm thu.
 Commands và quy trình phục hồi job/payment: [15-backup-and-recovery.md](docs/saas-plan/15-backup-and-recovery.md).
+
+## Admin cấu hình tích hợp
+
+Migration0013 thêm `GET/PATCH /api/v1/admin/integrations/sepay` và `/vnstock` với admin JWT.
+Sửa webhook/API key, bank/account/VA và payments flag; GET chỉ trả trạng thái key, không đọc lại secret.
+PATCH cần expected_revision + reason; optimistic conflict409, audited field names, payload mã hóa trong DB.
+SePay áp dụng từ request tiếp theo; Vnstock từ lần ingest tiếp theo, không tự login/bật provider.
+Chưa có admin override thì giữ `.env`; đã lưu thì DB ưu tiên, clear key không quay lại env key cũ.
+
+`quantik generate-integration-key` tạo khóa mã hóa một lần tại `runtime/integration-encryption.key`.
+Key local đã tạo; backup riêng và dùng cùng key cho API/ingest/restore. Không ghi đè hoặc regenerate khi restore.
+Chi tiết field names, examples, activation gates và giới hạn: [16-admin-integrations.md](docs/saas-plan/16-admin-integrations.md).

@@ -239,3 +239,23 @@ không Rabbit/no volumes/no build/pull, đã dọn owned container và credentia
 CLI thật trên DB local0012 tạo/verify/restore bundle và SQL export khớp124 statements; dọn restore target,
 giữ một bundle local có mục đích. Chưa có offsite/backup schedule/native Windows tools/VPS disaster drill.
 Runbook gồm keys/ACL exclusions, job redelivery và post-backup payment reconciliation; xem15.
+
+## Admin SePay/Vnstock credentials
+
+Theo yêu cầu bổ sung, migration0013 và GET/PATCH admin/integrations/{sepay|vnstock}. Typed PATCH với
+expected_revision/reason, atomic CAS chống ghi đè (concurrent operators một200/một409), audit metadata
+không secret values. Payload mã hóa Fernet; master key riêng runtime/secret mount; local đã tạo với ACL
+chỉ tài khoản vận hành/SYSTEM. GET chỉ có key-configured flags và các bank fields cần quản trị.
+
+SePay hot-read trên plans/create-order/webhook; orders cũ pin account/content, config mới không sửa đơn.
+Enable chỉ khi đủ config/VA; xóa webhook secret đang bật phải đồng thời disable. Vnstock ingest đọc key
+từ DB khi bắt đầu run, không tự login lúc save. Clear secret không fallback key env cũ; stored record ưu tiên
+env và không sửa .env. Wrong/missing master key hoặc tampered ciphertext fail503, không âm thầm fallback.
+
+Focused integration/auth/redaction/encryption/CAS/ingest-consumer/payment-settlement tests đạt; billing,
+scheduled ingestion/resume và SQLite backup critical checks đạt. Có sửa tên field trong test theo đúng
+order contract account_number; không đổi public order schema. Không gọi provider/bank thật, không Docker.
+Đã backup local trước migration; live API ready0013, admin GET cả hai provider200, anonymous401,
+encryption_ready=true/sourceENV/revision0; chưa tự import key env vào DB hoặc bật payments/provider.
+Tài liệu/API fields/master-key recovery tại16. Hai thay đổi supervisor dang dở trước đó giữ riêng, không
+thuộc component này; không tiếp tục triển khai supervisor theo yêu cầu dừng trước đó.

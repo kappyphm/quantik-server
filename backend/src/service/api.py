@@ -376,4 +376,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(config_router(settings, admin, db_session))
     from service.observability_api import router as observability_router
     app.include_router(observability_router(settings, admin, collector, http_metrics))
+    from service.integration_api import router as integration_router
+    app.include_router(integration_router(settings, admin, db_session))
     return app

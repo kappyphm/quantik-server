@@ -7,7 +7,7 @@ from alembic.config import Config
 import pytest
 
 from service.backups import BackupError, create_backup, inspect_backup, restore_backup
-from service.db import Base, make_engine, session_factory
+from service.db import Base, SCHEMA_REVISION, make_engine, session_factory
 from service.models import Account
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
@@ -22,7 +22,7 @@ def test_consistent_backup_restore_and_refuse_overwrite(tmp_path, monkeypatch):
         db.execute("INSERT INTO accounts(id,role,enabled,username) VALUES ('staff','admin',1,'fixture')")
     bundle = create_backup(url, tmp_path/"backups")
     manifest, database = inspect_backup(bundle)
-    assert manifest["schema_revision"] == "0012" and "source" not in manifest
+    assert manifest["schema_revision"] == SCHEMA_REVISION and "source" not in manifest
     # Copy retains committed data even after source changes.
     with sqlite3.connect(source) as db:
         db.execute("UPDATE accounts SET username='new-source-value' WHERE id='staff'")

@@ -10,6 +10,7 @@ from service import billing
 from service.jobs import JobError
 from service.models import BankPayment, PlanVersion, PurchaseOrder, Subscription, QuotaBucket
 from service.settings import Settings
+from service.integrations import sepay_settings
 import time
 
 
@@ -36,9 +37,12 @@ def payment_view(payment: BankPayment) -> dict:
 def router(settings: Settings, user: Callable, admin: Callable, db_session: Callable) -> APIRouter:
     routes = APIRouter(prefix="/api/v1")
 
+    def effective_settings(db=Depends(db_session)):
+        return sepay_settings(db, settings)
+
     @routes.get("/plans")
-    def plans(db=Depends(db_session)):
-        return {"payments_enabled": settings.payments_enabled, "items": [billing.plan_view(p) for p in
+    def plans(db=Depends(db_session), current=Depends(effective_settings)):
+        return {"payments_enabled": current.payments_enabled, "items": [billing.plan_view(p) for p in
             db.scalars(select(PlanVersion).where(PlanVersion.available.is_(True)).order_by(PlanVersion.price_vnd, PlanVersion.id))]}
 
     @routes.post("/admin/plans", status_code=201)
@@ -69,8 +73,8 @@ def router(settings: Settings, user: Callable, admin: Callable, db_session: Call
 
     @routes.post("/orders", status_code=201)
     def create_order(body: OrderInput, idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
-                     account=Depends(user), db=Depends(db_session)):
-        order = billing.create_order(db, account.id, body.plan_id, idempotency_key, settings)
+                     account=Depends(user), db=Depends(db_session), current=Depends(effective_settings)):
+        order = billing.create_order(db, account.id, body.plan_id, idempotency_key, current)
         db.commit()
         return billing.order_view(order)
 
@@ -125,9 +129,9 @@ def router(settings: Settings, user: Callable, admin: Callable, db_session: Call
             "next_cursor": rows[limit-1].id if len(rows) > limit else None}
 
     @routes.post("/webhooks/sepay")
-    async def webhook(request: Request, authorization: str | None = Header(default=None), db=Depends(db_session)):
-        billing.authenticate_webhook(settings, authorization)
-        billing.require_configuration(settings)
+    async def webhook(request: Request, authorization: str | None = Header(default=None), db=Depends(db_session), current=Depends(effective_settings)):
+        billing.authenticate_webhook(current, authorization)
+        billing.require_configuration(current)
         raw = bytearray()
         async for chunk in request.stream():
             raw.extend(chunk)

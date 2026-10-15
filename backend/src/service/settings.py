@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     sepay_requires_transfer_prefix: bool = Field(default=False, validation_alias="SEPAY_REQUIRES_TRANSFER_PREFIX")
     payments_enabled: bool = False
     scheduled_provider_enabled: bool = False
+    vnstock_api_key: SecretStr = Field(default=SecretStr(""), validation_alias="VNSTOCK_API_KEY")
+    integration_encryption_key_path: Path = Path("runtime/integration-encryption.key")
     metrics_token: SecretStr = SecretStr("")
     release_id: str = Field(default="development", pattern=r"^[A-Za-z0-9._-]{1,64}$")
 

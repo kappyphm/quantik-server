@@ -25,6 +25,7 @@ Tài liệu đủ để bắt đầu implementation. Các mục PROPOSED là thi
 | [13 — Local infrastructure evidence](13-local-infrastructure-evidence.md) | Real PostgreSQL/RabbitMQ races, JSONB integrity và dump/restore |
 | [14 — Observability](14-observability.md) | Private health/metrics, process heartbeat, logs và alert templates |
 | [15 — Backup/recovery](15-backup-and-recovery.md) | Consistent DB bundles, checksum, separate-target restore và recovery runbook |
+| [16 — Admin integrations](16-admin-integrations.md) | SePay/Vnstock config API, encrypted secrets, revision và runtime precedence |
 
 ## Quy ước
 

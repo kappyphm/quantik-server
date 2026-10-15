@@ -16,7 +16,7 @@ from service.settings import Settings
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="quantik")
-    parser.add_argument("command", choices=["migrate", "generate-keys", "seed-admin", "ingest-market", "train-model", "publish-model", "build-snapshot", "worker", "dispatcher", "dependencies", "reconciler", "recover-delivery", "screen-market", "seed-operations", "scheduler", "schedule-worker", "backup", "restore-backup", "verify-backup"])
+    parser.add_argument("command", choices=["migrate", "generate-keys", "generate-integration-key", "seed-admin", "ingest-market", "train-model", "publish-model", "build-snapshot", "worker", "dispatcher", "dependencies", "reconciler", "recover-delivery", "screen-market", "seed-operations", "scheduler", "schedule-worker", "backup", "restore-backup", "verify-backup"])
     parser.add_argument("--target-session", type=date.fromisoformat)
     parser.add_argument("--start", type=date.fromisoformat, default=date(2021, 1, 1))
     parser.add_argument("--symbol", action="append")
@@ -55,6 +55,19 @@ def main() -> None:
             raise SystemExit(str(exc)) from None
         except Exception as exc:
             raise SystemExit("BACKUP_OPERATION_FAILED:"+type(exc).__name__) from None
+    elif args.command == "generate-integration-key":
+        from cryptography.fernet import Fernet
+        path = settings.integration_encryption_key_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            raise SystemExit("Integration encryption key already exists; refusing to overwrite") from None
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(Fernet.generate_key()+b"\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        print("Integration encryption key generated; back it up separately and restrict file access")
     elif args.command == "migrate":
         command.upgrade(Config("backend/alembic.ini"), "head")
     elif args.command == "seed-operations":

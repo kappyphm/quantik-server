@@ -5,8 +5,10 @@
 Đã có `quantik backup`, `quantik verify-backup` và `quantik restore-backup` cho SQLite/PostgreSQL.
 Chạy từ repository root, shared venv đã activate. Backup online gồm schema và dữ liệu ứng dụng,
 kể cả reports, model text artifacts và historical/snapshot JSON đang lưu trong DB.
-Không kèm `.env`, RSA keys, Vnstock auth state hoặc cluster-global roles/tablespaces.
+Không kèm `.env`, RSA keys, integration encryption key, Vnstock auth state hoặc cluster-global roles/tablespaces.
 Các secrets/keys cần bản lưu riêng có mã hóa; chưa có offsite destination được cấu hình.
+Từ migration0013, credentials admin nằm trong DB dưới dạng ciphertext: khi restore phải khôi phục đúng
+integration encryption key ở secret mount riêng. Tạo key mới không giải mã được dữ liệu cũ; xem[16](16-admin-integrations.md).
 
 Mỗi bundle có manifest format1, dialect, UTC timestamp, Alembic revision, byte count và SHA256.
 Không lưu connection URL/password trong manifest. Output nằm dưới `runtime/backups`, được gitignore.

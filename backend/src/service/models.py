@@ -462,3 +462,12 @@ class ProcessHeartbeat(Base):
     progress_at: Mapped[int] = mapped_column(Integer)
     state: Mapped[str] = mapped_column(String(16))
     error_type: Mapped[str | None] = mapped_column(String(100))
+
+
+class IntegrationConfig(Base):
+    __tablename__ = "integration_configs"
+    name: Mapped[str] = mapped_column(String(16), primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer, default=0)
+    encrypted_payload: Mapped[str | None] = mapped_column(String)
+    updated_at: Mapped[int | None] = mapped_column(Integer)
+    actor_id: Mapped[str | None] = mapped_column(ForeignKey("accounts.id"))
