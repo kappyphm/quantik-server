@@ -16,7 +16,7 @@ from service.settings import Settings
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="quantik")
-    parser.add_argument("command", choices=["migrate", "generate-keys", "seed-admin", "ingest-market", "train-model", "publish-model", "build-snapshot", "worker", "dispatcher", "dependencies", "reconciler", "recover-delivery", "screen-market", "seed-operations", "scheduler", "schedule-worker"])
+    parser.add_argument("command", choices=["migrate", "generate-keys", "seed-admin", "ingest-market", "train-model", "publish-model", "build-snapshot", "worker", "dispatcher", "dependencies", "reconciler", "recover-delivery", "screen-market", "seed-operations", "scheduler", "schedule-worker", "backup", "restore-backup", "verify-backup"])
     parser.add_argument("--target-session", type=date.fromisoformat)
     parser.add_argument("--start", type=date.fromisoformat, default=date(2021, 1, 1))
     parser.add_argument("--symbol", action="append")
@@ -28,11 +28,34 @@ def main() -> None:
     parser.add_argument("--input-mode", choices=["COMPLETED_DAILY", "PROVISIONAL_DAILY"], default="COMPLETED_DAILY")
     parser.add_argument("--minimum-bars", type=int, default=1)
     parser.add_argument("--kind", choices=["INGEST", "SCREEN", "SNAPSHOT", "TRAIN"])
+    parser.add_argument("--directory", type=Path, default=Path("runtime/backups"))
+    parser.add_argument("--backup", type=Path, help="Completed backup bundle directory")
+    parser.add_argument("--postgres-container", help="Explicit local PostgreSQL container used for pg_dump/pg_restore utilities")
     args = parser.parse_args()
     load_dotenv()
     settings = Settings()
     Path("runtime").mkdir(exist_ok=True)
-    if args.command == "migrate":
+    if args.command in {"backup", "restore-backup", "verify-backup"}:
+        from service.backups import BackupError, create_backup, inspect_backup, restore_backup
+        try:
+            if args.command == "backup":
+                result = {"backup_directory": str(create_backup(settings.database_url, args.directory, container=args.postgres_container))}
+            elif not args.backup:
+                parser.error("--backup is required")
+            elif args.command == "verify-backup":
+                manifest, _ = inspect_backup(args.backup)
+                result = {"status": "CHECKSUM_VERIFIED", "dialect": manifest["dialect"], "schema_revision": manifest["schema_revision"]}
+            else:
+                target = os.environ.get("QUANTIK_RESTORE_DATABASE_URL")
+                if not target:
+                    parser.error("Set QUANTIK_RESTORE_DATABASE_URL to a separate empty restore target")
+                result = restore_backup(args.backup, target, settings.database_url, container=args.postgres_container)
+            print(result)
+        except BackupError as exc:
+            raise SystemExit(str(exc)) from None
+        except Exception as exc:
+            raise SystemExit("BACKUP_OPERATION_FAILED:"+type(exc).__name__) from None
+    elif args.command == "migrate":
         command.upgrade(Config("backend/alembic.ini"), "head")
     elif args.command == "seed-operations":
         from sqlalchemy import select

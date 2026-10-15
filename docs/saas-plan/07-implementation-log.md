@@ -225,3 +225,17 @@ Ba observability checks đạt, cùng admin/refund critical check; local migrate
 quota anomalies0 và broker_up=false đúng trạng thái broker chưa bật. Không chạy/build Docker ở bước này.
 Prometheus scrape/rule templates đã có nhưng chưa nghiệm thu bằng promtool hoặc notification receiver.
 Host/container metrics, exporter và alert delivery còn thuộc deployment gate; xem14.
+
+## Backup bundles và restore target riêng
+
+Thêm CLI backup/verify-backup/restore-backup: SQLite online backup + integrity/FK check, PostgreSQL custom dump
+với exported snapshot, private bundle manifest/SHA256/revision. Restore từ chối current/existing target;
+PG import một transaction, không clean/drop database; credentials qua env, không URL args/manifest.
+Hỗ trợ native tools hoặc explicit local DB container sau xác minh published port.
+
+SQLite check và PostgreSQL17 check thật đạt2 tests/7.06s (runner14.16s); so nội dung tất cả model tables,
+source changes sau backup không đổi restored image. Runner --backup-only chỉ một tmpfs container1CPU/512MiB,
+không Rabbit/no volumes/no build/pull, đã dọn owned container và credential file; volume inventory giữ nguyên.
+CLI thật trên DB local0012 tạo/verify/restore bundle và SQL export khớp124 statements; dọn restore target,
+giữ một bundle local có mục đích. Chưa có offsite/backup schedule/native Windows tools/VPS disaster drill.
+Runbook gồm keys/ACL exclusions, job redelivery và post-backup payment reconciliation; xem15.

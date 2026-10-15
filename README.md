@@ -306,3 +306,15 @@ Focused checks: `python -m pytest backend/tests/test_observability.py -q`.
 Local API ready schema0012, admin health và authenticated scrape đã kiểm chứng; broker local hiện down,
 được báo đúng qua health, không tự bật Docker. Alert YAML chỉ là template, chưa chạy Prometheus/promtool.
 Chi tiết, giới hạn và cách đọc metrics: [14-observability.md](docs/saas-plan/14-observability.md).
+
+## Backup và khôi phục local
+
+`quantik backup` tạo bundle DB nhất quán dưới `runtime/backups`; `quantik verify-backup --backup BUNDLE`
+kiểm size/checksum. `quantik restore-backup --backup BUNDLE` đọc target từ `QUANTIK_RESTORE_DATABASE_URL`,
+chỉ restore vào file mới/database trống có tên khác DB hiện tại. Không tự chuyển app sang target.
+PostgreSQL dùng native utilities hoặc `--postgres-container NAME` với container local đã xác minh port.
+Secrets không đi vào command arguments/manifest; bundle chứa dữ liệu riêng tư nên phải giữ quyền truy cập hạn chế.
+
+SQLite và PostgreSQL thật đã kiểm restore; test container đã dọn, không build image/tạo volume.
+Offsite, lịch backup tự động và RPO/RTO còn chưa nghiệm thu.
+Commands và quy trình phục hồi job/payment: [15-backup-and-recovery.md](docs/saas-plan/15-backup-and-recovery.md).

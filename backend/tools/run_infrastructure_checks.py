@@ -17,8 +17,11 @@ from uuid import uuid4
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--postgres-image", required=True, help="Existing image tag or sha256 ID")
-    parser.add_argument("--broker-image", required=True, help="Existing image tag or sha256 ID")
+    parser.add_argument("--broker-image", help="Existing image tag or sha256 ID")
+    parser.add_argument("--backup-only", action="store_true", help="Only one PostgreSQL container and focused backup/restore checks")
     args = parser.parse_args()
+    if not args.backup_only and not args.broker_image:
+        parser.error("--broker-image is required unless --backup-only")
     root = Path(__file__).resolve().parents[2]
     run_id = uuid4().hex[:10]
     directory = root / "runtime" / "infrastructure-check"
@@ -52,33 +55,48 @@ def main() -> None:
         print("Temporary container started: "+suffix, flush=True)
         return name, int(mapped.rsplit(":", 1)[1])
 
+    def ready(name, probe, *, rabbit=False):
+        deadline = time.monotonic()+90
+        while True:
+            # Root probes can create a root-only Erlang cookie during Rabbit initialization.
+            prefix = ["docker", "exec"] + (["--user", "rabbitmq"] if rabbit else [])
+            if command([*prefix, name, *probe], check=False, timeout=15).returncode == 0:
+                return
+            state = command(["docker", "inspect", name, "--format", "{{json .State}}"], check=False)
+            terminal = state.returncode or not json.loads(state.stdout)["Running"]
+            if terminal or time.monotonic() >= deadline:
+                logs = command(["docker", "logs", "--tail", "25", name], check=False)
+                raise RuntimeError("Temporary infrastructure readiness failed: "+
+                    (logs.stdout+logs.stderr).replace(password, "<redacted>"))
+            time.sleep(1)
+
     started = time.monotonic()
     try:
         db, db_port = launch("db", args.postgres_image, 5432,
             "/var/lib/postgresql/data:rw,nosuid,size=256m", "512m",
             ["postgres", "-c", "shared_buffers=32MB", "-c", "max_connections=40", "-c", "work_mem=2MB",
                 "-c", "min_wal_size=32MB", "-c", "max_wal_size=96MB"])
+        ready(db, ["pg_isready", "-U", "quantik_check", "-d", "quantik_check"])
+        if args.backup_only:
+            from sqlalchemy.engine import URL
+            url = URL.create("postgresql+psycopg", username="quantik_check", password=password,
+                host="127.0.0.1", port=db_port, database="quantik_check")
+            env = os.environ.copy()
+            env.update(QUANTIK_ENVIRONMENT="test", VNSTOCK_API_KEY="", QUANTIK_SCHEDULED_PROVIDER_ENABLED="false",
+                QUANTIK_CHECK_DATABASE_URL=url.render_as_string(hide_password=False),
+                QUANTIK_CHECK_POSTGRES_CONTAINER=db)
+            result = command([sys.executable, "-m", "pytest", "backend/tests/test_backups.py", "-q", "--tb=short"],
+                env=env, check=False, timeout=120)
+            print((result.stdout+result.stderr).replace(password, "<redacted>"), flush=True)
+            if result.returncode:
+                raise RuntimeError("Backup infrastructure checks failed")
+            (directory/"latest-backup-result.json").write_text(json.dumps({"status": "PASSED",
+                "duration_seconds": round(time.monotonic()-started, 2), "postgres_image": args.postgres_image,
+                "scope": "SQLite and real PostgreSQL backup bundle restore; all model tables compared; no provider calls"}, indent=2), encoding="utf-8")
+            return
         broker, broker_port = launch("broker", args.broker_image, 5672,
             "/var/lib/rabbitmq:rw,nosuid,size=128m", "512m", [])
-        for name, probe in ((db, ["pg_isready", "-U", "quantik_check", "-d", "quantik_check"]),
-                            (broker, ["rabbitmq-diagnostics", "-q", "ping"])):
-            deadline = time.monotonic()+90
-            while True:
-                # CLI must share the RabbitMQ service user; a root probe during init can
-                # create a root-only Erlang cookie and prevent the actual server starting.
-                exec_prefix = ["docker", "exec"] + (["--user", "rabbitmq"] if name == broker else [])
-                if command([*exec_prefix, name, *probe], check=False, timeout=15).returncode == 0:
-                    break
-                state = command(["docker", "inspect", name, "--format", "{{json .State}}"], check=False)
-                if state.returncode or not json.loads(state.stdout)["Running"]:
-                    logs = command(["docker", "logs", "--tail", "25", name], check=False)
-                    raise RuntimeError("Temporary container stopped before readiness: "+
-                        (logs.stdout+logs.stderr).replace(password, "<redacted>"))
-                if time.monotonic() >= deadline:
-                    logs = command(["docker", "logs", "--tail", "25", name], check=False)
-                    raise RuntimeError("Temporary infrastructure did not become ready: "+
-                        (logs.stdout+logs.stderr).replace(password, "<redacted>"))
-                time.sleep(1)
+        ready(broker, ["rabbitmq-diagnostics", "-q", "ping"], rabbit=True)
         print("Temporary PostgreSQL and RabbitMQ ready; no persistent volumes", flush=True)
         from sqlalchemy import create_engine, text
         from sqlalchemy.engine import URL
@@ -143,6 +161,12 @@ def main() -> None:
                     command(["docker", "rm", "-f", "-v", name])
             except Exception:
                 cleanup_errors.append(name)
+        inventory = command(["docker", "ps", "-a", "--format", "{{.Names}}"], check=False)
+        if inventory.returncode:
+            cleanup_errors.append("docker-inventory-unavailable")
+        else:
+            remaining = set(inventory.stdout.splitlines()).intersection(containers)
+            cleanup_errors.extend(sorted(remaining))
         env_path.unlink(missing_ok=True)
         if cleanup_errors:
             raise RuntimeError("Cleanup could not confirm removal: "+", ".join(cleanup_errors))
