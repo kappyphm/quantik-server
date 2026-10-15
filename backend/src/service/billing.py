@@ -70,6 +70,8 @@ def require_configuration(settings: Settings) -> None:
     if not all([settings.sepay_bank_code, settings.sepay_account_number, settings.sepay_account_name,
                 settings.sepay_webhook_api_key.get_secret_value()]):
         raise JobError("PAYMENT_CONFIGURATION_MISSING", 503)
+    if settings.sepay_requires_transfer_prefix and not settings.sepay_transfer_prefix.strip():
+        raise JobError("PAYMENT_VA_PREFIX_MISSING", 503)
 
 
 def authenticate_webhook(settings: Settings, authorization: str | None) -> None:

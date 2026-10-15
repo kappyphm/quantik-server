@@ -19,6 +19,9 @@ Environment: SEPAY_BANK_CODE, SEPAY_ACCOUNT_NUMBER, SEPAY_ACCOUNT_NAME, SEPAY_WE
 SEPAY_TRANSFER_PREFIX for required TKP/VA content. User's `TP` was normalized to TPBank via official bank list.
 Account existence/ownership and required VA prefix remain unverified. QUANTIK_PAYMENTS_ENABLED defaults
 false until bank, QR/content and webhook setup are checked. No real payment has been sent or validated.
+User subsequently confirmed this TPBank connection uses VA/TKP; local SEPAY_REQUIRES_TRANSFER_PREFIX=true.
+Exact prefix is pending. When required, missing SEPAY_TRANSFER_PREFIX rejects payment configuration even
+if payments_enabled is switched on, preventing an order with incomplete transfer instructions.
 
 ## Webhook and entitlements
 
