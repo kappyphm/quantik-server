@@ -240,7 +240,10 @@ def test_snapshot_reference_cache_report_invariance_and_publication(tmp_path, mo
             keys = list(db.scalars(select(DependencyWaiter.dependency_key).where(DependencyWaiter.job_id.in_(waiting_ids))))
             assert len(keys) == 2 and len(set(keys)) == 1
         for pending_id in waiting_ids:
-            assert client.post(f"/api/v1/analyses/{pending_id}/cancel", headers=headers).json()["quota_effect"] == "RELEASED"
+            assert client.post(f"/api/v1/analyses/{pending_id}/cancel", headers=headers).status_code == 404
+            with sessions() as db, db.begin():
+                from service.jobs import fail_waiting
+                fail_waiting(db, pending_id, "FIXTURE_DATA_UNAVAILABLE")
         # Security revocation after compute starts fences completion and releases the reservation.
         last = client.post("/api/v1/analyses", json=body,
             headers=headers | {"Idempotency-Key": "disabled-during-compute"}).json()["id"]

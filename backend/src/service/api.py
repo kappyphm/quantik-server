@@ -256,12 +256,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def analysis(job_id: str, account=Depends(user), db=Depends(db_session)):
         return job_response(db, jobs.owned_job(db, account.id, job_id))
 
-    @app.post("/api/v1/analyses/{job_id}/cancel")
-    def cancel_analysis(job_id: str, account=Depends(user), db=Depends(db_session)):
-        job = jobs.cancel(db, account.id, job_id)
-        db.commit()
-        return job_response(db, job)
-
     @app.get("/api/v1/reports/{report_id}", response_model=ReportResult)
     def report(report_id: str, account=Depends(user), db=Depends(db_session)):
         report = db.scalar(select(AnalysisReport).where(AnalysisReport.id == report_id,
@@ -272,8 +266,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/v1/me/usage")
     def usage(account=Depends(user), db=Depends(db_session)):
+        from service.daily_limits import current_bucket
+        current_bucket(db, account.id, int(time.time()))
+        db.commit()
         return {"buckets": [{"id": b.id, "total": b.quota_total, "reserved": b.reserved,
-            "consumed": b.consumed, "active_jobs": b.active_jobs, "active_limit": b.active_limit,
+            "consumed": b.consumed, "created": b.daily_created, "quota_period": "DAY" if b.subscription_id else "LEGACY", "active_jobs": b.active_jobs, "active_limit": b.active_limit,
             "valid_from": b.valid_from, "valid_until": b.valid_until}
             for b in db.scalars(select(QuotaBucket).where(QuotaBucket.account_id == account.id)
                 .order_by(QuotaBucket.valid_from.desc()).limit(50))]}

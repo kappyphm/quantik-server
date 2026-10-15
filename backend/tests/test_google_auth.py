@@ -99,8 +99,8 @@ def test_google_exchange_browser_binding_and_role_isolation(tmp_path, monkeypatc
         assert client.get("/api/v1/analyses", headers=headers).json()["items"][0]["id"] == job_id
         assert client.get("/api/v1/analyses/unknown", headers=headers).status_code == 404
         result = client.post(f"/api/v1/analyses/{job_id}/cancel", headers=headers)
-        assert result.json()["quota_effect"] == "RELEASED"
-        assert client.get("/api/v1/me/usage", headers=headers).json()["buckets"][0]["reserved"] == 0
+        assert result.status_code == 404
+        assert client.get("/api/v1/me/usage", headers=headers).json()["buckets"][0]["reserved"] == 1
         assert client.post("/api/v1/auth/exchange", json={"code": exchange},
             headers=origin | {"Cookie": f"quantik_oauth_browser={browser}"}).status_code == 401
         assert client.post("/api/v1/auth/refresh", headers=origin).status_code == 200

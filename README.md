@@ -338,3 +338,17 @@ Chi tiết field names, examples, activation gates và giới hạn: [16-admin-i
 `GET /api/v1/admin/orders` is admin-only and paginated with `limit`/`cursor`. Optional exact filters: `status` (PENDING/PAID/EXPIRED/CANCELLED), `account_id`, `plan_id`, `reference`. EXPIRED includes pending orders whose payment deadline has passed; filtering does not mutate their stored status.
 
 `GET /api/v1/admin/orders/{id}` returns the original order payment instructions, verified customer name/email, immutable purchased plan, linked bank payments and granted subscription period. Customer JWTs cannot read these endpoints. These endpoints do not mark orders paid, cancel purchases, refund money or grant quota. No schema change is required.
+
+## Chính sách gói và vận hành cập nhật 16/10/2026
+
+- Gói có thời hạn theo `duration_days`; `daily_request_limit` là số yêu cầu phân tích được tiếp nhận tối đa mỗi ngày theo Asia/Ho_Chi_Minh, reset00:00. `analysis_quota` chỉ giữ như tên trường tương thích của cùng hạn mức ngày, không còn là tổng lượt cả kỳ.
+- Yêu cầu tạo thành công tính hạn mức, kể cả kết thúc lỗi; retry cùng Idempotency-Key không tính thêm. Không có API hủy phân tích hoặc hoàn lượt. Worker vẫn có thể kết thúc lỗi khi tài khoản bị khóa hoặc không đủ dữ liệu; việc giải phóng reservation nội bộ không mở lại hạn mức tạo trong ngày.
+- Subscription giữ toàn thời hạn gói; quota bucket tách theo ngày và được tạo khi đọc quyền/tiếp nhận yêu cầu. Yêu cầu chưa xong từ ngày trước vẫn tính giới hạn đồng thời toàn tài khoản. Mua tiếp nối sau kỳ đã mua.
+- Ngừng bán chỉ chặn tạo đơn mới; webhook có khóa hợp lệ vẫn được ghi nhận. Webhook đến sau hạn đơn luôn vào đối soát theo quyết định người dùng. Không xóa webhook key khi còn đơn chờ hoặc giao dịch cần xử lý.
+- Đơn trả metadata gói đã mua, kỳ được cấp, dự kiến hiệu lực, server_now và payment_resolution. Trạng thái RECONCILIATION ẩn QR, không có thao tác tự công nhận PAID.
+- Mặc định tạo đơn tiếp tục đơn PENDING còn hạn của cùng gói; mọi request key được gắn bền với kết quả, kể cả khi đơn đó đã PAID ở lần retry. `new_order=true` dùng khi thực sự cần đơn riêng.
+- Tạo gói admin bắt buộc Idempotency-Key. Phiên bản sao chép có replaces_plan_id; mở phiên bản thay thế cần replace_existing=true, đóng bản cũ trong cùng transaction và kiểm tra bản thay thế cạnh tranh.
+- Admin users hỗ trợ q theo tên/email/ID và enabled. Lịch sử orders/payments/subscriptions/jobs/audit dùng cursor theo thời gian+ID mới nhất trước; cursor không còn là ID đơn thuần.
+- Schema0015 là migration thêm cột/bảng, đã thử trên bản sao DB có dữ liệu và kiểm foreign_key_check. Cần migrate trước khi chạy binary mới. Các bảng refund/ledger cũ giữ để đọc lịch sử, API tạo refund đã gỡ.
+
+Kiểm tra: các test billing/jobs/admin/auth/integrations/snapshot liên quan đã chạy trên DBtạm;9test thuộc nhóm đạt sau cập nhật kỳ vọng409 bảo vệ webhook key. Có kiểm reset ngày, idempotency, active limit qua nửa đêm, phiên bản thay thế, đơn cần đối soát và retired endpoints. Không dùng giao dịch ngân hàng thật.

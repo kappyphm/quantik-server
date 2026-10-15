@@ -75,7 +75,8 @@ class QuotaBucket(Base):
     __tablename__ = "quota_buckets"
     __table_args__ = (CheckConstraint("quota_total >= 0 AND consumed >= 0 AND reserved >= 0"),
         CheckConstraint("consumed + reserved <= quota_total"),
-        CheckConstraint("active_jobs >= 0 AND active_limit > 0"))
+        CheckConstraint("active_jobs >= 0 AND active_limit > 0"),
+        UniqueConstraint("subscription_id", "valid_from"))
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
     valid_from: Mapped[int] = mapped_column(Integer)
@@ -86,6 +87,8 @@ class QuotaBucket(Base):
     active_jobs: Mapped[int] = mapped_column(Integer, default=0)
     active_limit: Mapped[int] = mapped_column(Integer)
     entitlement_version: Mapped[str] = mapped_column(String(100))
+    subscription_id: Mapped[str | None] = mapped_column(ForeignKey("subscriptions.id"))
+    daily_created: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
 
 class Job(Base):
@@ -325,7 +328,8 @@ class PublishedScreening(Base):
 
 class PlanVersion(Base):
     __tablename__ = "plan_versions"
-    __table_args__ = (CheckConstraint("price_vnd > 0 AND duration_days > 0 AND analysis_quota > 0 AND active_limit > 0"),)
+    __table_args__ = (CheckConstraint("price_vnd > 0 AND duration_days > 0 AND analysis_quota > 0 AND active_limit > 0"),
+        UniqueConstraint("created_by", "creation_key"))
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     name: Mapped[str] = mapped_column(String(100))
     price_vnd: Mapped[int] = mapped_column(Integer)
@@ -335,6 +339,10 @@ class PlanVersion(Base):
     features: Mapped[dict] = mapped_column(JSON)
     available: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[int] = mapped_column(Integer)
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("accounts.id"))
+    creation_key: Mapped[str | None] = mapped_column(String(128))
+    creation_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    replaces_plan_id: Mapped[str | None] = mapped_column(ForeignKey("plan_versions.id"))
 
 
 class PurchaseOrder(Base):
@@ -356,6 +364,13 @@ class PurchaseOrder(Base):
     expires_at: Mapped[int] = mapped_column(Integer)
     paid_at: Mapped[int | None] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(16), default="PENDING")
+
+
+class PurchaseIntent(Base):
+    __tablename__ = "purchase_intents"
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), primary_key=True)
+    key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    order_id: Mapped[str] = mapped_column(ForeignKey("purchase_orders.id"))
 
 
 class BankPayment(Base):

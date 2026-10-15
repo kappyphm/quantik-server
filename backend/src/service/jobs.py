@@ -51,19 +51,25 @@ def admit(db: Session, account_id: str, symbol: str, target_session: date,
         if existing.payload_hash != hashed:
             raise JobError("IDEMPOTENCY_CONFLICT")
         return existing
-    bucket = db.scalar(select(QuotaBucket).where(QuotaBucket.account_id == account_id,
+    from service.daily_limits import current_bucket
+    bucket = current_bucket(db, account_id, now)
+    bucket = bucket or db.scalar(select(QuotaBucket).where(QuotaBucket.account_id == account_id,
         QuotaBucket.valid_from <= now, QuotaBucket.valid_until > now)
         .order_by(QuotaBucket.valid_from.desc(), QuotaBucket.id).limit(1).with_for_update())
     if not bucket:
         raise JobError("NO_ENTITLEMENT", 403)
+    if bucket.daily_created >= bucket.quota_total:
+        raise JobError("DAILY_REQUEST_LIMIT", 429)
     active_count = db.scalar(select(func.count()).select_from(Job).where(Job.account_id == account_id,
         Job.status.not_in(TERMINAL)))
     if active_count >= bucket.active_limit:
         raise JobError("ACTIVE_JOB_LIMIT", 429)
     changed = db.execute(update(QuotaBucket).where(QuotaBucket.id == bucket.id,
+        QuotaBucket.daily_created < QuotaBucket.quota_total,
         QuotaBucket.consumed + QuotaBucket.reserved < QuotaBucket.quota_total,
         QuotaBucket.active_jobs < QuotaBucket.active_limit)
-        .values(reserved=QuotaBucket.reserved + 1, active_jobs=QuotaBucket.active_jobs + 1))
+        .values(reserved=QuotaBucket.reserved + 1, active_jobs=QuotaBucket.active_jobs + 1,
+            daily_created=QuotaBucket.daily_created + 1))
     if changed.rowcount != 1:
         raise JobError("QUOTA_OR_JOB_LIMIT", 429)
     job = Job(account_id=account_id, bucket_id=bucket.id, idempotency_key=idempotency_key,
