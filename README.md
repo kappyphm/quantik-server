@@ -40,6 +40,8 @@ Không có tài nguyên Docker được tạo bởi test này.
 
 ## Google login
 
+Migration `0014` thêm `accounts.display_name` và `accounts.email`; GET `/api/v1/me` trả tên/email từ ID token Google đã xác minh. Flow dùng scope `openid email profile`, chỉ lưu email khi `email_verified=true`; tài khoản cũ cần đăng nhập Google lại để cập nhật. Identity vẫn dựa trên Google sub. Đây là phần bổ sung hồ sơ hiển thị, không thay chính sách quyền/quota/thanh toán.
+
 Trong Google Cloud OAuth client, thêm redirect URI đúng với QUANTIK_PUBLIC_ORIGIN:
 `http://localhost:8000/api/v1/auth/google/callback` cho local; dùng HTTPS domain thật khi deploy.
 Tham khảo [Google OIDC server flow](https://developers.google.com/identity/openid-connect/openid-connect).

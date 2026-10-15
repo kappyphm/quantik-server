@@ -41,6 +41,7 @@ def test_google_exchange_browser_binding_and_role_isolation(tmp_path, monkeypatc
         active_nonce = ""
         invalid_nonce = False
         token_calls = 0
+        google_profile = {"name": "Người dùng kiểm thử", "email": "verified@example.test", "email_verified": True}
 
         def token_endpoint(request):
             nonlocal token_calls
@@ -51,6 +52,7 @@ def test_google_exchange_browser_binding_and_role_isolation(tmp_path, monkeypatc
             claims = {"sub": "google-stable-sub", "iss": "https://accounts.google.com",
                 "aud": "test-client", "iat": int(time.time()), "exp": int(time.time()) + 600,
                 "nonce": "wrong-nonce" if invalid_nonce else active_nonce}
+            claims.update(google_profile)
             return httpx.Response(200, json={"id_token": jwt.encode(claims, private.read_bytes(), algorithm="RS256")})
 
         provider.http = httpx.Client(transport=httpx.MockTransport(token_endpoint))
@@ -60,6 +62,7 @@ def test_google_exchange_browser_binding_and_role_isolation(tmp_path, monkeypatc
         params = parse_qs(urlsplit(start["authorization_url"]).query)
         active_nonce = params["nonce"][0]
         assert params["code_challenge_method"] == ["S256"]
+        assert "profile" in params["scope"][0].split()
         state = params["state"][0]
         browser = client.cookies.get("quantik_oauth_browser")
         denied = client.get("/api/v1/auth/google/callback", params={"state": state, "code": "provider-code"},
@@ -82,6 +85,8 @@ def test_google_exchange_browser_binding_and_role_isolation(tmp_path, monkeypatc
         assert client.get("/api/v1/admin/me", headers=headers).status_code == 401
         assert client.get("/health/ready").status_code == 200
         owner_id = client.get("/api/v1/me", headers=headers).json()["id"]
+        assert client.get("/api/v1/me", headers=headers).json() == {
+            "id": owner_id, "role": "user", "display_name": "Người dùng kiểm thử", "email": "verified@example.test"}
         with session_factory(engine)() as db, db.begin():
             db.add(QuotaBucket(account_id=owner_id, valid_from=int(time.time())-10,
                 valid_until=int(time.time())+1000, quota_total=5, active_limit=2, entitlement_version="fixture"))
@@ -107,6 +112,15 @@ def test_google_exchange_browser_binding_and_role_isolation(tmp_path, monkeypatc
         params = parse_qs(urlsplit(client.get("/api/v1/auth/google/start").json()["authorization_url"]).query)
         active_nonce, invalid_nonce = params["nonce"][0], True
         assert client.get("/api/v1/auth/google/callback", params={"state": params["state"][0], "code": "bad-nonce"}).status_code == 401
+        # Same Google sub remains the same account; unverified email is never displayed.
+        invalid_nonce = False
+        google_profile.update(name="Tên mới đã xác minh", email="unverified@example.test", email_verified=False)
+        params = parse_qs(urlsplit(client.get("/api/v1/auth/google/start").json()["authorization_url"]).query)
+        active_nonce = params["nonce"][0]
+        result = client.get("/api/v1/auth/google/callback", params={"state": params["state"][0], "code": "updated-profile"})
+        result = client.post("/api/v1/auth/exchange", json={"code": result.json()["exchange_code"]}, headers=origin)
+        current = client.get("/api/v1/me", headers={"Authorization": "Bearer " + result.json()["access_token"]}).json()
+        assert current == {"id": owner_id, "role": "user", "display_name": "Tên mới đã xác minh", "email": None}
     with session_factory(engine)() as db:
         assert len(list(db.scalars(select(Account).where(Account.google_sub.is_not(None))))) == 1
     engine.dispose()

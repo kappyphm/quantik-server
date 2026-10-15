@@ -222,7 +222,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/v1/me")
     def profile(account=Depends(user)):
-        return {"id": account.id, "role": account.role}
+        return {"id": account.id, "role": account.role,
+            "display_name": account.display_name, "email": account.email}
 
     def job_response(db, job):
         reservation = db.scalar(select(Reservation).where(Reservation.job_id == job.id))
