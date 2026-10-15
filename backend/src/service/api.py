@@ -81,7 +81,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.exception_handler(jobs.JobError)
     async def job_error(request: Request, exc: jobs.JobError):
         return JSONResponse(status_code=exc.status, content={"code": exc.code,
-            "message": "Job operation failed", "request_id": request.state.request_id})
+            "message": "Operation failed", "request_id": request.state.request_id})
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError):
@@ -326,4 +326,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"universe_version": reference.id, "items": [{"symbol": s, **meta} for s, meta in selected[:limit]],
             "next_cursor": selected[limit-1][0] if len(selected) > limit else None}
 
+    from service.billing_api import router as billing_router
+    app.include_router(billing_router(settings, user, admin, db_session))
     return app

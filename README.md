@@ -239,3 +239,19 @@ Universe và data fixture không được phục vụ qua API mặc định; sou
 Focused checks đạt boolean parity completed inputs với prototype, missing/short/index availability,
 provisional denominator, stable ranks, all-results, PM/AM publication, deadline giữ latest và authenticated
 API pagination. Chưa có calendar/scheduler automation hoặc live full-universe acceptance.
+
+## Thanh toán prepaid
+
+Migration 0009 thêm plan versions, orders, bank payments, subscriptions và nối quota hiện có.
+Admin tạo draft plan qua POST /api/v1/admin/plans, rồi bật availability. Customer tạo đơn qua
+POST /api/v1/orders với Idempotency-Key, nhận số tiền/nội dung/QR; GET /orders/{id} xem trạng thái.
+POST /api/v1/webhooks/sepay yêu cầu `Authorization: Apikey ...`, khớp giao dịch và cấp gói/quota nguyên tử.
+Renewal xếp kỳ tiếp theo; không auto-debit. Có API đối soát cho admin và kiểm tra entitlement cho user.
+
+Điền SEPAY_BANK_CODE, SEPAY_ACCOUNT_NUMBER, SEPAY_ACCOUNT_NAME, SEPAY_WEBHOOK_API_KEY trong .env;
+SEPAY_TRANSFER_PREFIX nếu ngân hàng yêu cầu TKP/VA. QUANTIK_PAYMENTS_ENABLED mặc định false,
+chỉ bật sau khi kiểm tra tài khoản, QR/nội dung và webhook. Policy và giới hạn xác minh tại
+[10-billing-policy.md](docs/saas-plan/10-billing-policy.md).
+
+Focused check: `python -m pytest backend/tests/test_billing.py -q` (shared venv).
+Chưa xác minh SePay sandbox/live, PostgreSQL concurrency hoặc hoàn tiền ngân hàng.

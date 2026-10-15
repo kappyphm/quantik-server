@@ -20,6 +20,12 @@ class Settings(BaseSettings):
     amqp_url: SecretStr = SecretStr("amqp://guest:guest@127.0.0.1:5672/%2F")
     allow_fixture_analysis: bool = False
     allow_degraded_analysis: bool = False
+    sepay_webhook_api_key: SecretStr = Field(default=SecretStr(""), validation_alias="SEPAY_WEBHOOK_API_KEY")
+    sepay_bank_code: str = Field(default="", validation_alias="SEPAY_BANK_CODE")
+    sepay_account_number: str = Field(default="", validation_alias="SEPAY_ACCOUNT_NUMBER")
+    sepay_account_name: str = Field(default="", validation_alias="SEPAY_ACCOUNT_NAME")
+    sepay_transfer_prefix: str = Field(default="", validation_alias="SEPAY_TRANSFER_PREFIX", max_length=50)
+    payments_enabled: bool = False
 
     @model_validator(mode="after")
     def production_checks(self) -> "Settings":

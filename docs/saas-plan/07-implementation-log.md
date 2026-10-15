@@ -149,3 +149,16 @@ Test đạt completed boolean parity, missing/partial availability, raw morning 
 PM+AM publication/wait/deadline, giữ rejected/all-results và API auth/pagination. Ingestion nhận short
 histories để screening không áp min120 lên tất cả tiêu chí; quant/model giữ min riêng120. Không gọi lại Vnstock,
 không tạo Docker. Calendar/scheduler, billing/admin và deployment tiếp tục ở các thành phần sau.
+
+## Thành phần prepaid billing
+
+Migration 0009: immutable plan versions, idempotent pinned orders/QR, normalized bank payments,
+subscriptions và quota buckets. API customer/admin/Webhook API-key; dedup SePay ID + bank reference hash.
+Exact amount/account/inbound/reference/window validation, atomic grant, queued renewal, explicit audited
+manual reconciliation và order cancellation. Source contract/policy tại mục 10; chưa live/sandbox bank gate.
+
+Focused check đã phát hiện initial SQLite SAVEPOINT có thể giữ event sau outer rollback; thay bằng native
+INSERT ON CONFLICT để webhook/payment/subscription/quota cùng commit/rollback. Check JWT/ownership,
+duplicates, mismatches, manual resolution, renewable periods, actual job admission và rollback đã đạt.
+Recheck sau account/order lock bảo vệ cancellation/disabled state races; PG concurrency vẫn cần acceptance.
+Bank config đã lưu .env, payments mặc định disabled, đang chờ làm rõ TPBank VA prefix. Không gọi Vnstock/Docker.

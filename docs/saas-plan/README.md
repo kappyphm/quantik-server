@@ -19,6 +19,7 @@ Tài liệu đủ để bắt đầu implementation. Các mục PROPOSED là thi
 | [07 — Implementation log](07-implementation-log.md) | Quyết định triển khai và evidence thực tế |
 | [08 — Report mapping](08-report-field-mapping.md) | Nested outputs và compatibility contract |
 | [09 — Screening policy](09-screening-policy.md) | 21 criteria, availability, scoring và publication |
+| [10 — Billing policy](10-billing-policy.md) | Prepaid plans, SePay matching, renewal và đối soát |
 
 ## Quy ước
 

@@ -319,3 +319,70 @@ class PublishedScreening(Base):
     __tablename__ = "published_screenings"
     name: Mapped[str] = mapped_column(String(8), primary_key=True)
     run_id: Mapped[str] = mapped_column(ForeignKey("screening_runs.id"))
+
+
+class PlanVersion(Base):
+    __tablename__ = "plan_versions"
+    __table_args__ = (CheckConstraint("price_vnd > 0 AND duration_days > 0 AND analysis_quota > 0 AND active_limit > 0"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    name: Mapped[str] = mapped_column(String(100))
+    price_vnd: Mapped[int] = mapped_column(Integer)
+    duration_days: Mapped[int] = mapped_column(Integer)
+    analysis_quota: Mapped[int] = mapped_column(Integer)
+    active_limit: Mapped[int] = mapped_column(Integer)
+    features: Mapped[dict] = mapped_column(JSON)
+    available: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[int] = mapped_column(Integer)
+
+
+class PurchaseOrder(Base):
+    __tablename__ = "purchase_orders"
+    __table_args__ = (UniqueConstraint("account_id", "idempotency_key"),
+        CheckConstraint("amount_vnd > 0"),
+        CheckConstraint("status IN ('PENDING','PAID','EXPIRED','CANCELLED')"))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
+    plan_id: Mapped[str] = mapped_column(ForeignKey("plan_versions.id"))
+    idempotency_key: Mapped[str] = mapped_column(String(128))
+    reference: Mapped[str] = mapped_column(String(32), unique=True)
+    amount_vnd: Mapped[int] = mapped_column(Integer)
+    bank_code: Mapped[str] = mapped_column(String(32))
+    bank_account: Mapped[str] = mapped_column(String(64))
+    account_name: Mapped[str] = mapped_column(String(128))
+    transfer_content: Mapped[str] = mapped_column(String(128))
+    created_at: Mapped[int] = mapped_column(Integer)
+    expires_at: Mapped[int] = mapped_column(Integer)
+    paid_at: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(16), default="PENDING")
+
+
+class BankPayment(Base):
+    __tablename__ = "bank_payments"
+    __table_args__ = (UniqueConstraint("bank_transaction_key"),
+        CheckConstraint("amount_vnd > 0"))
+    # SePay's stable transaction ID is global across replay/retry.
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    bank_transaction_key: Mapped[str | None] = mapped_column(String(64))
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    order_id: Mapped[str | None] = mapped_column(ForeignKey("purchase_orders.id"), index=True)
+    bank_code: Mapped[str] = mapped_column(String(32))
+    bank_account: Mapped[str] = mapped_column(String(64))
+    direction: Mapped[str] = mapped_column(String(4))
+    amount_vnd: Mapped[int] = mapped_column(Integer)
+    transaction_at: Mapped[int] = mapped_column(Integer)
+    received_at: Mapped[int] = mapped_column(Integer)
+    references: Mapped[list] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(20))
+    reason: Mapped[str | None] = mapped_column(String(100))
+
+
+class Subscription(Base):
+    __tablename__ = "subscriptions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
+    order_id: Mapped[str] = mapped_column(ForeignKey("purchase_orders.id"), unique=True)
+    payment_id: Mapped[str] = mapped_column(ForeignKey("bank_payments.id"), unique=True)
+    bucket_id: Mapped[str] = mapped_column(ForeignKey("quota_buckets.id"), unique=True)
+    plan_id: Mapped[str] = mapped_column(ForeignKey("plan_versions.id"))
+    valid_from: Mapped[int] = mapped_column(Integer)
+    valid_until: Mapped[int] = mapped_column(Integer)
