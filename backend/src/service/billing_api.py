@@ -1,14 +1,15 @@
 """Customer billing and explicit admin actions; dependencies supplied by the app."""
 import json
 from collections.abc import Callable
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 
 from service import billing
 from service.jobs import JobError
-from service.models import BankPayment, PlanVersion, PurchaseOrder, Subscription, QuotaBucket
+from service.models import Account, BankPayment, PlanVersion, PurchaseOrder, Subscription, QuotaBucket
 from service.settings import Settings
 from service.integrations import sepay_settings
 import time
@@ -89,6 +90,53 @@ def router(settings: Settings, user: Callable, admin: Callable, db_session: Call
     @routes.get("/orders/{order_id}")
     def order(order_id: str, account=Depends(user), db=Depends(db_session)):
         return billing.order_view(billing.owned_order(db, account.id, order_id))
+
+    @routes.get("/admin/orders")
+    def admin_orders(cursor: str | None = None, limit: int = Query(20, ge=1, le=100),
+                     status: Literal["PENDING", "PAID", "EXPIRED", "CANCELLED"] | None = None,
+                     account_id: str | None = None, plan_id: str | None = None,
+                     reference: str | None = Query(None, min_length=1, max_length=32),
+                     actor=Depends(admin), db=Depends(db_session)):
+        now = int(time.time())
+        query = select(PurchaseOrder, Account, PlanVersion).join(Account, Account.id == PurchaseOrder.account_id).join(
+            PlanVersion, PlanVersion.id == PurchaseOrder.plan_id).order_by(PurchaseOrder.id)
+        if cursor:
+            query = query.where(PurchaseOrder.id > cursor)
+        if account_id:
+            query = query.where(PurchaseOrder.account_id == account_id)
+        if plan_id:
+            query = query.where(PurchaseOrder.plan_id == plan_id)
+        if reference:
+            query = query.where(PurchaseOrder.reference == reference.strip().upper())
+        if status == "EXPIRED":
+            query = query.where(or_(PurchaseOrder.status == "EXPIRED", and_(
+                PurchaseOrder.status == "PENDING", PurchaseOrder.expires_at <= now)))
+        elif status == "PENDING":
+            query = query.where(PurchaseOrder.status == "PENDING", PurchaseOrder.expires_at > now)
+        elif status:
+            query = query.where(PurchaseOrder.status == status)
+        rows = list(db.execute(query.limit(limit + 1)))
+        return {"items": [billing.order_view(order, now) | {"account_id": customer.id,
+            "display_name": customer.display_name, "email": customer.email, "plan_name": plan.name}
+            for order, customer, plan in rows[:limit]],
+            "next_cursor": rows[limit - 1][0].id if len(rows) > limit else None}
+
+    @routes.get("/admin/orders/{order_id}")
+    def admin_order(order_id: str, actor=Depends(admin), db=Depends(db_session)):
+        order = db.get(PurchaseOrder, order_id)
+        if not order:
+            raise JobError("NOT_FOUND", 404)
+        customer = db.get(Account, order.account_id)
+        plan = db.get(PlanVersion, order.plan_id)
+        subscription = db.scalar(select(Subscription).where(Subscription.order_id == order.id))
+        return billing.order_view(order) | {
+            "customer": {"id": customer.id, "display_name": customer.display_name, "email": customer.email},
+            "plan": billing.plan_view(plan),
+            "payments": [payment_view(p) for p in db.scalars(select(BankPayment).where(
+                BankPayment.order_id == order.id).order_by(BankPayment.received_at, BankPayment.id))],
+            "subscription": {key: getattr(subscription, key) for key in
+                ("id", "bucket_id", "valid_from", "valid_until")} if subscription else None,
+        }
 
     @routes.get("/payments")
     def payments(cursor: str | None = None, limit: int = Query(50, ge=1, le=100), account=Depends(user), db=Depends(db_session)):

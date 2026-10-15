@@ -332,3 +332,9 @@ Chưa có admin override thì giữ `.env`; đã lưu thì DB ưu tiên, clear k
 `quantik generate-integration-key` tạo khóa mã hóa một lần tại `runtime/integration-encryption.key`.
 Key local đã tạo; backup riêng và dùng cùng key cho API/ingest/restore. Không ghi đè hoặc regenerate khi restore.
 Chi tiết field names, examples, activation gates và giới hạn: [16-admin-integrations.md](docs/saas-plan/16-admin-integrations.md).
+
+### Admin order lookup
+
+`GET /api/v1/admin/orders` is admin-only and paginated with `limit`/`cursor`. Optional exact filters: `status` (PENDING/PAID/EXPIRED/CANCELLED), `account_id`, `plan_id`, `reference`. EXPIRED includes pending orders whose payment deadline has passed; filtering does not mutate their stored status.
+
+`GET /api/v1/admin/orders/{id}` returns the original order payment instructions, verified customer name/email, immutable purchased plan, linked bank payments and granted subscription period. Customer JWTs cannot read these endpoints. These endpoints do not mark orders paid, cancel purchases, refund money or grant quota. No schema change is required.

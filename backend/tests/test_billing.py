@@ -54,6 +54,16 @@ def test_prepaid_payment_contract_and_atomic_entitlement(tmp_path, monkeypatch):
             return result.json()
 
         first = order("first")
+        # Order administration is read-only and never available to customer JWTs.
+        for path in ("/api/v1/admin/orders", f"/api/v1/admin/orders/{first['id']}"):
+            assert client.get(path).status_code == 401
+            assert client.get(path, headers=user_auth).status_code == 401
+        rows = client.get("/api/v1/admin/orders", params={"status": "PENDING", "reference": first["reference"]}, headers=admin_auth).json()
+        assert [item["id"] for item in rows["items"]] == [first["id"]]
+        assert rows["items"][0]["plan_name"] == "Beta 30"
+        assert client.get("/api/v1/admin/orders", params={"account_id": "absent"}, headers=admin_auth).json()["items"] == []
+        assert client.get("/api/v1/admin/orders", params={"status": "INVALID"}, headers=admin_auth).status_code == 422
+        assert client.get("/api/v1/admin/orders/missing", headers=admin_auth).status_code == 404
         assert order("first")["id"] == first["id"]
         assert first["transfer_content"] == first["reference"] and "amount=99000" in first["qr_url"]
         assert client.get(f"/api/v1/orders/{first['id']}", headers=other_auth).status_code == 404
@@ -78,6 +88,11 @@ def test_prepaid_payment_contract_and_atomic_entitlement(tmp_path, monkeypatch):
         send(body | {"id": 2})  # Same bank reference, different SePay ID must not grant twice.
         assert client.get(f"/api/v1/orders/{first['id']}", headers=user_auth).json()["status"] == "PAID"
         assert client.get("/api/v1/me/entitlements", headers=user_auth).json()["remaining"] == 30
+        detail = client.get(f"/api/v1/admin/orders/{first['id']}", headers=admin_auth).json()
+        assert detail["customer"]["id"] == owner_id and detail["plan"]["price_vnd"] == 99000
+        assert detail["subscription"]["bucket_id"]
+        assert any(p["status"] == "APPLIED" for p in detail["payments"])
+        assert "idempotency_key" not in detail and "fingerprint" not in str(detail)
         assert client.post(f"/api/v1/orders/{first['id']}/cancel", headers=user_auth).status_code == 409
         send(payload(first, 3))  # A genuinely second transfer goes to reconciliation.
         with sessions() as db:
@@ -119,6 +134,14 @@ def test_prepaid_payment_contract_and_atomic_entitlement(tmp_path, monkeypatch):
             db.get(PurchaseOrder, late["id"]).expires_at = int(time.time())-1
         send(payload(late, 20))
         assert client.get(f"/api/v1/orders/{late['id']}", headers=user_auth).json()["status"] == "EXPIRED"
+        expired = client.get("/api/v1/admin/orders", params={"status": "EXPIRED"}, headers=admin_auth).json()["items"]
+        assert late["id"] in {o["id"] for o in expired}
+        pending = client.get("/api/v1/admin/orders", params={"status": "PENDING"}, headers=admin_auth).json()["items"]
+        assert late["id"] not in {o["id"] for o in pending}
+        page1 = client.get("/api/v1/admin/orders", params={"limit": 1, "plan_id": plan_id}, headers=admin_auth).json()
+        page2 = client.get("/api/v1/admin/orders", params={"limit": 1, "plan_id": plan_id, "cursor": page1["next_cursor"]}, headers=admin_auth).json()
+        assert len(page1["items"]) == len(page2["items"]) == 1
+        assert page1["items"][0]["id"] != page2["items"][0]["id"]
         resolution = {"order_id": late["id"], "reason": "Verified late transfer against bank statement"}
         for _ in range(2):
             result = client.post("/api/v1/admin/reconciliation/20/apply", json=resolution, headers=admin_auth)
