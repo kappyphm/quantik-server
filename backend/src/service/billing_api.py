@@ -61,8 +61,9 @@ def router(settings: Settings, user: Callable, admin: Callable, db_session: Call
         if not plan:
             raise JobError("NOT_FOUND", 404)
         # Plan content is immutable. Price/quota changes always create a new version.
+        before = plan.available
         plan.available = body.available
-        billing.audit(db, "billing.plan_availability", {"plan_id": plan_id, "available": body.available}, account.id)
+        billing.audit(db, "billing.plan_availability", {"plan_id": plan_id, "before": before, "after": body.available}, account.id)
         db.commit()
         return billing.plan_view(plan)
 

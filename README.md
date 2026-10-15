@@ -255,3 +255,14 @@ chỉ bật sau khi kiểm tra tài khoản, QR/nội dung và webhook. Policy v
 
 Focused check: `python -m pytest backend/tests/test_billing.py -q` (shared venv).
 Chưa xác minh SePay sandbox/live, PostgreSQL concurrency hoặc hoàn tiền ngân hàng.
+
+## Quản trị vận hành
+
+Migration 0010 thêm hoàn lượt có Idempotency-Key/reason/evidence, append ledger và audit, không sửa
+settlement gốc. POST /api/v1/admin/jobs/{id}/quota-refund hoàn một lượt vào bucket cũ; bucket hết hạn
+không được chuyển thành quota kỳ mới. Đây là hoàn lượt phân tích; hoàn tiền ngân hàng chưa triển khai.
+
+POST /api/v1/admin/users/{id}/state khóa/mở customer có reason; khóa revoke sessions ngay, reconciler
+fence/release jobs đang chờ/chạy. Có bounded GET views users/jobs/payments/subscriptions/audit/models/data-health
+dưới /api/v1/admin. Chi tiết: [11-admin-operations.md](docs/saas-plan/11-admin-operations.md).
+Focused checks: test_admin_operations.py và test_jobs.py đã đạt; chưa có PG race/load acceptance.

@@ -211,10 +211,18 @@ def failed_attempt(db: Session, job_id: str, token: str, reason: str, retryable:
 
 def reconcile(db: Session) -> int:
     now = int(time.time())
+    # Account suspension commits without taking job locks, avoiding account->job versus
+    # completion's job->account deadlock. This sweep fences/releases pending work promptly.
+    disabled = list(db.scalars(select(Job).join(Account, Account.id == Job.account_id)
+        .where(Account.enabled.is_(False), Job.status.not_in(TERMINAL))
+        .order_by(Job.created_at).limit(100).with_for_update(skip_locked=True, of=Job)))
+    for job in disabled:
+        job.status, job.reason, job.execution_token, job.lease_until = "FAILED", "ACCOUNT_DISABLED", None, None
+        settle(db, job, False, job.reason)
     jobs = list(db.scalars(select(Job).where(Job.status.not_in(TERMINAL),
         or_(Job.deadline <= now, (Job.status == "RUNNING") & (Job.lease_until <= now)))
         .order_by(Job.created_at).limit(100).with_for_update(skip_locked=True)))
-    changed = 0
+    changed = len(disabled)
     for job in jobs:
         if job.deadline <= now:
             job.status, job.reason = "FAILED", "DEPENDENCY_DEADLINE"

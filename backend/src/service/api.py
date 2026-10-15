@@ -17,7 +17,7 @@ from service.google_auth import GoogleProvider, callback, exchange_identity, sta
 from service import jobs
 from service.models import AnalysisReport, Job, QuotaBucket, Reservation
 from service.reports import ReportResult
-from service.models import PublishedScreening, ScreeningResult, ScreeningRun, UniverseVersion
+from service.models import PublishedScreening, ScreeningResult, ScreeningRun, UniverseVersion, QuotaRefund
 from service.screening_contracts import ScreeningPage
 from service.settings import Settings
 
@@ -204,9 +204,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def job_response(db, job):
         reservation = db.scalar(select(Reservation).where(Reservation.job_id == job.id))
         report = db.scalar(select(AnalysisReport).where(AnalysisReport.job_id == job.id))
+        refund = db.scalar(select(QuotaRefund).join(Reservation, Reservation.id == QuotaRefund.reservation_id)
+            .where(Reservation.job_id == job.id))
         return {"id": job.id, "symbol": job.symbol, "target_session": job.target_session,
             "status": job.status, "reason": job.reason, "quota_effect": reservation.state,
-            "report_id": report.id if report else None, "compute_started_at": job.compute_started_at}
+            "report_id": report.id if report else None, "compute_started_at": job.compute_started_at,
+            "quota_refund_id": refund.id if refund else None}
 
     @app.post("/api/v1/analyses", status_code=202)
     def create_analysis(body: AnalysisRequest, account=Depends(user), db=Depends(db_session),
@@ -328,4 +331,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     from service.billing_api import router as billing_router
     app.include_router(billing_router(settings, user, admin, db_session))
+    from service.admin_api import router as admin_router
+    app.include_router(admin_router(admin, db_session))
     return app

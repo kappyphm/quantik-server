@@ -386,3 +386,15 @@ class Subscription(Base):
     plan_id: Mapped[str] = mapped_column(ForeignKey("plan_versions.id"))
     valid_from: Mapped[int] = mapped_column(Integer)
     valid_until: Mapped[int] = mapped_column(Integer)
+
+
+class QuotaRefund(Base):
+    __tablename__ = "quota_refunds"
+    __table_args__ = (UniqueConstraint("actor_id", "idempotency_key"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    actor_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"))
+    reservation_id: Mapped[str] = mapped_column(ForeignKey("reservations.id"), unique=True)
+    idempotency_key: Mapped[str] = mapped_column(String(128))
+    reason: Mapped[str] = mapped_column(String(500))
+    evidence: Mapped[str] = mapped_column(String(1000))
+    created_at: Mapped[int] = mapped_column(Integer)

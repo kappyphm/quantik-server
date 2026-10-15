@@ -162,3 +162,15 @@ INSERT ON CONFLICT để webhook/payment/subscription/quota cùng commit/rollbac
 duplicates, mismatches, manual resolution, renewable periods, actual job admission và rollback đã đạt.
 Recheck sau account/order lock bảo vệ cancellation/disabled state races; PG concurrency vẫn cần acceptance.
 Bank config đã lưu .env, payments mặc định disabled, đang chờ làm rõ TPBank VA prefix. Không gọi Vnstock/Docker.
+
+## Thành phần admin operations
+
+Migration 0010 thêm quota_refunds, one-per-reservation + actor/idempotency key. Explicit admin refund
+append compensating ledger, giữ original settlement và credit bucket gốc, không chuyển lượt hết hạn sang kỳ
+mới. Customer job response có refund ID. Account disable audit before/after và revoke sessions; reconciler
+fence/release pending/running jobs với ACCOUNT_DISABLED, tránh account→job lock inversion ở action disable.
+
+Bounded admin users/jobs/payments/subscriptions/audit/models/data-health views không đọc artifacts/histories.
+Focused admin API check và existing job lifecycle đã đạt; có refund replay/conflict, rollback, expired bucket,
+security stop/stale token, re-enable không revive session, read routes và audit. PG concurrency chưa xác minh.
+General config rollback, bank refunds, scheduler và deployment vẫn còn. Policy chi tiết tại mục 11.
