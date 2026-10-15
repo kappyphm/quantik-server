@@ -190,3 +190,20 @@ Focused scheduler/resume/readiness/admin config/screening checks đạt; local m
 và provider-disabled worker --once chạy thành công. Lịch đã materialize19 tasks,16 quá hạn được ghi nhận rõ
 ở lần bootstrap, không có provider calls. Chưa xác minh PG races, scheduled live run hoặc deployment.
 Chi tiết tại mục12; observability/deployment/backup/load và live integration gates vẫn còn.
+
+## PostgreSQL/RabbitMQ thật và restore local
+
+Thêm opt-in runner dùng existing image IDs, hai container tmpfs1CPU/512MiB riêng, không pull/build/volumes.
+Repo quantik-backend cũ có Docker resources khác nên giữ nguyên. Runner cleanup theo ownership label cả khi
+test fail; readiness chạy Rabbit CLI đúng service user, tránh cookie root/eacces ở startup.
+
+5 checks trên PostgreSQL/RabbitMQ thật đạt: concurrent admission/idempotency/cancel-complete/payment/refund,
+config CAS/scheduler lanes, Rabbit confirm/duplicate/ack/DLX/app restart, JSONB numeric roundtrip, và fixture
+API→outbox→real Rabbit→AnalysisWorker→16-section report/quota. pg_dump/restore DB riêng khớp toàn bộ bảng
+cả hai schema. Baseline/model vẫn fixture/degraded có chủ đích; không thay live/scientific/VPS/load acceptance.
+
+Check thật phát hiện SNAPSHOT_CHECKSUM_MISMATCH sau JSONB lưu số theo representation khác. Recipebeta3
+dùng streamed semantic numeric hash cho snapshot dependency/root/member/reference, không làm tròn metrics;
+giữ legacy hash cho beta2 reader và không đổi history/model identities. One-ULP/type/collision checks đạt.
+Upgrade builder/worker coordinated sau drain, không mixed-recipe rolling deployment. Chi tiết/evidence tại13.
+Final inspection không còn check containers, image/volume inventory giữ nguyên. Provider vẫn không gọi lại.

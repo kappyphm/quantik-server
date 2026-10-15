@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import or_, select, update
 
 from service.market_data import DataError, checksum
+from service.canonical_json import semantic_checksum
 from service.model_lifecycle import manifest_frames
 from service.models import ComponentResult, DataManifest, HistoryRevision, MarketSnapshot, ModelVersion, PublishedModel, PublishedSnapshot, UniverseVersion, new_id
 from service.quant import engines as e
@@ -81,7 +82,7 @@ def build_market_snapshot(sessions, manifest_id: str, config: QuantConfig, *, mi
         dependency = {"manifest": manifest.id, "model": model_id, "config": asdict(config),
             "engine": ENGINE_VERSION, "policy": SNAPSHOT_POLICY, "evaluation_day": evaluation_day.isoformat(),
             "minimum_coverage": minimum_coverage}
-    key, token = checksum(dependency), new_id()
+    key, token = semantic_checksum(dependency), new_id()
     with sessions() as db, db.begin():
         db.execute(_insert(db)(MarketSnapshot).values(id=new_id(), dependency_key=key, manifest_id=manifest_id,
             model_id=model_id, target_session=manifest.target_session, created_at=now, status="BUILDING",
@@ -90,7 +91,7 @@ def build_market_snapshot(sessions, manifest_id: str, config: QuantConfig, *, mi
         snapshot = db.scalar(select(MarketSnapshot).where(MarketSnapshot.dependency_key == key))
         snapshot_id = snapshot.id
         if snapshot.status == "READY":
-            if checksum(snapshot.payload) != snapshot.payload_checksum:
+            if semantic_checksum(snapshot.payload) != snapshot.payload_checksum:
                 raise DataError("SNAPSHOT_CHECKSUM_MISMATCH")
             return snapshot
         claimed = db.execute(update(MarketSnapshot).where(MarketSnapshot.id == snapshot_id,
@@ -147,9 +148,9 @@ def build_market_snapshot(sessions, manifest_id: str, config: QuantConfig, *, mi
         payload = json_metrics({"versions": dependency, "members": reports, "reference": reference,
             "excluded": excluded, "coverage_ratio": len(reports) / len(members), "warnings": warnings,
             "model_age_days": model_age, "data_as_of": index.index[-1].date().isoformat()})
-        payload["reference_checksum"] = checksum(payload["reference"])
-        payload["member_checksums"] = {symbol: checksum(report) for symbol, report in payload["members"].items()}
-        hashed = checksum(payload)
+        payload["reference_checksum"] = semantic_checksum(payload["reference"])
+        payload["member_checksums"] = {symbol: semantic_checksum(report) for symbol, report in payload["members"].items()}
+        hashed = semantic_checksum(payload)
         with sessions() as db, db.begin():
             if operation_guard:
                 operation_guard(db)

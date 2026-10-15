@@ -1,4 +1,5 @@
 import service
+import os
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 
@@ -19,7 +20,7 @@ from service.models import DataManifest, MarketSnapshot, PublishedSnapshot
 from service.models import Account, AnalysisReport, DependencyRequest, DependencyWaiter, Inbox, Job, JobAttempt, Outbox, QuotaBucket, Reservation
 from service.api import create_app
 from service.analysis_worker import AnalysisWorker, Envelope, wake_waiters
-from service.broker import BrokerUnavailable, dispatch_once
+from service.broker import BrokerUnavailable, RabbitTransport, dispatch_once
 from service.settings import Settings
 from service.quant import engines as e
 from service.quant.assembly import finalize_member
@@ -27,8 +28,8 @@ from service.quant.configuration import QuantConfig, engine_context
 from service.report_assembly import assemble_report
 
 
-def test_snapshot_reference_cache_report_invariance_and_publication(tmp_path, monkeypatch):
-    url = "sqlite:///" + (tmp_path / "snapshots.sqlite").as_posix()
+def test_snapshot_reference_cache_report_invariance_and_publication(tmp_path, monkeypatch, request):
+    url = os.environ.get("QUANTIK_CHECK_SNAPSHOT_URL") or "sqlite:///" + (tmp_path / "snapshots.sqlite").as_posix()
     monkeypatch.setenv("QUANTIK_DATABASE_URL", url)
     monkeypatch.setenv("QUANTIK_ENVIRONMENT", "test")
     command.upgrade(Config("backend/alembic.ini"), "head")
@@ -160,6 +161,25 @@ def test_snapshot_reference_cache_report_invariance_and_publication(tmp_path, mo
                 raise BrokerUnavailable("SIMULATED_CONFIRM_LOSS")
 
     transport = ConfirmedTransport()
+    rabbit = None
+    if os.environ.get("QUANTIK_CHECK_AMQP_URL"):
+        from pydantic import SecretStr
+        real_settings = settings.model_copy(update={"amqp_url": SecretStr(os.environ["QUANTIK_CHECK_AMQP_URL"])})
+        from uuid import uuid4
+        rabbit = RabbitTransport(real_settings, "quantik_snapshot_check_"+uuid4().hex)
+        original_publish = transport.publish
+        def real_publish(envelope):
+            rabbit.publish(envelope)
+            original_publish(envelope)
+        transport.publish = real_publish
+        def cleanup_broker():
+            if rabbit.connection.is_open:
+                rabbit.channel.queue_delete(queue=rabbit.queue)
+                rabbit.channel.queue_delete(queue=rabbit.queue+".dead")
+                rabbit.channel.exchange_delete(exchange=rabbit.namespace)
+                rabbit.channel.exchange_delete(exchange=rabbit.namespace+".dead")
+                rabbit.close()
+        request.addfinalizer(cleanup_broker)
     with TestClient(create_app(settings)) as client:
         with sessions() as db, db.begin():
             access, _ = client.app.state.identity.new_session(db, db.get(Account, account_id))
@@ -176,8 +196,13 @@ def test_snapshot_reference_cache_report_invariance_and_publication(tmp_path, mo
             assert db.scalar(select(Outbox).where(Outbox.job_id == job_id)).published_at is None
         transport.fail = False
         assert dispatch_once(sessions, transport) == 1
-        assert worker.process(transport.events[0]) == "SUCCEEDED"
-        assert worker.process(transport.events[1]) == "DUPLICATE"
+        if rabbit:
+            rabbit.consume(worker, once=True)
+            rabbit.consume(worker, once=True)
+            assert rabbit.channel.queue_declare(queue=rabbit.queue, passive=True).method.message_count == 0
+        else:
+            assert worker.process(transport.events[0]) == "SUCCEEDED"
+            assert worker.process(transport.events[1]) == "DUPLICATE"
         status = client.get(f"/api/v1/analyses/{job_id}", headers=headers).json()
         assert status["status"] == "SUCCEEDED" and status["quota_effect"] == "CONSUMED"
         report = client.get("/api/v1/reports/" + status["report_id"], headers=headers)

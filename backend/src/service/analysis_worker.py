@@ -9,6 +9,7 @@ from sqlalchemy import select, update
 
 from service import jobs
 from service.market_data import DataError, DailyHistory, checksum
+from service.canonical_json import semantic_checksum
 from service.models import Account, DataManifest, DependencyRequest, DependencyWaiter, HistoryRevision, Inbox, Job, JobAttempt, MarketSnapshot, ModelVersion, Outbox, PublishedSnapshot
 from service.quant.configuration import QuantConfig
 from service.settings import Settings
@@ -61,13 +62,14 @@ def resolve_inputs(db, job: Job, settings: Settings) -> dict:
         MarketSnapshot.target_session == job.target_session)).first()
     if not row:
         raise DataError("SNAPSHOT_NOT_READY", True)
-    if not row.dependency or checksum(row.dependency) != row.dependency_key:
+    content_hash = semantic_checksum if row.dependency and row.dependency.get("policy") == SNAPSHOT_POLICY else checksum
+    if not row.dependency or content_hash(row.dependency) != row.dependency_key:
         raise DataError("SNAPSHOT_DEPENDENCY_CORRUPTED")
-    if row.dependency["engine"] != ENGINE_VERSION or row.dependency["policy"] != SNAPSHOT_POLICY:
+    if row.dependency["engine"] != ENGINE_VERSION or row.dependency["policy"] not in {"market-snapshot-beta-2", SNAPSHOT_POLICY}:
         raise DataError("SNAPSHOT_ENGINE_UNAVAILABLE", not bool(pinned))
     if not row.member:
         raise DataError("SYMBOL_SNAPSHOT_INELIGIBLE")
-    if checksum(row.member) != row.member_checksum or checksum(row.reference) != row.reference_checksum:
+    if content_hash(row.member) != row.member_checksum or content_hash(row.reference) != row.reference_checksum:
         raise DataError("SNAPSHOT_MEMBER_CORRUPTED")
     manifest = db.get(DataManifest, row.manifest_id)
     if not manifest or manifest.target_session != job.target_session:

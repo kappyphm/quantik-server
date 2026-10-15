@@ -280,3 +280,16 @@ Admin có /api/v1/admin/configs/{kind} để tạo version/activate/rollback b�
 deadline, restart recovery và source/model gates. Screening freshness dùng calendar khi có coverage.
 Lịch2027 không được suy đoán; cần import bản có nguồn. Xem [12-scheduled-operations.md](docs/saas-plan/12-scheduled-operations.md)
 cho đầy đủ commands, timings, config và giới hạn kiểm chứng. Chưa có supervision/acceptance trên VPS.
+
+## Kiểm chứng hạ tầng local
+
+Đã chạy PostgreSQL/RabbitMQ thật bằng image có sẵn, container tmpfs có giới hạn và cleanup theo nhãn sở hữu.
+5 focused checks đạt: races/quota/billing/config, Rabbit confirms/duplicate/restart/DLX, snapshot/report fixture
+E2E qua broker thật và JSONB integrity. pg_dump/pg_restore sang DB riêng khớp nội dung mọi bảng.
+Không pull/build image, không tạo volume; các resources của repo khác được giữ nguyên.
+
+Runner opt-in: `python backend/tools/run_infrastructure_checks.py --postgres-image EXISTING_IMAGE --broker-image EXISTING_IMAGE`.
+Chạy bằng Python trong shared venv, thay image arguments bằng IDs/tags đã có. Bình thường tests hạ tầng skip
+khi không có env kiểm thử riêng. [Evidence và giới hạn](docs/saas-plan/13-local-infrastructure-evidence.md).
+Snapshot recipebeta3 sửa hash số sau JSONB; drain/update đồng bộ builders/workers khi đổi phiên bản.
+Đây vẫn là fixture/local acceptance; Google/SePay/Vnstock live, load trên VPS và backup offsite chưa được xác minh.
