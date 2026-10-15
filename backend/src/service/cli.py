@@ -16,18 +16,23 @@ from service.settings import Settings
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="quantik")
-    parser.add_argument("command", choices=["migrate", "generate-keys", "seed-admin", "ingest-market", "train-model", "publish-model", "build-snapshot"])
+    parser.add_argument("command", choices=["migrate", "generate-keys", "seed-admin", "ingest-market", "train-model", "publish-model", "build-snapshot", "worker", "dispatcher", "dependencies", "reconciler", "recover-delivery"])
     parser.add_argument("--target-session", type=date.fromisoformat)
     parser.add_argument("--start", type=date.fromisoformat, default=date(2021, 1, 1))
     parser.add_argument("--symbol", action="append")
     parser.add_argument("--manifest-id")
     parser.add_argument("--model-id")
+    parser.add_argument("--once", action="store_true")
+    parser.add_argument("--transport", choices=["amqp", "local"], default="amqp")
     args = parser.parse_args()
     load_dotenv()
     settings = Settings()
     Path("runtime").mkdir(exist_ok=True)
     if args.command == "migrate":
         command.upgrade(Config("backend/alembic.ini"), "head")
+    elif args.command in {"worker", "dispatcher", "dependencies", "reconciler", "recover-delivery"}:
+        from service.runtime import run_service
+        run_service(args.command, settings, once=args.once, transport=args.transport)
     elif args.command == "generate-keys":
         private_path, public_path = settings.jwt_private_key_path, settings.jwt_public_key_path
         if private_path.exists() or public_path.exists():

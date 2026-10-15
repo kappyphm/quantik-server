@@ -5,7 +5,7 @@ from datetime import date
 
 from sqlalchemy import select, update
 
-from service.market_data import DataError, DailyHistory, checksum, persist_immutable
+from service.market_data import DataError, DailyHistory, checksum, persist_immutable, signal_dependency_change
 from service.models import DataManifest, HistoryRevision, ModelVersion, PublishedModel, UniverseVersion
 from service.quant.configuration import QuantConfig
 from service.quant.training import TrainingPolicy, train_artifact
@@ -74,6 +74,7 @@ def promote_model(db, model_id: str) -> ModelVersion:
     model.status = "PUBLISHED"
     if model.published_at is None:
         model.published_at = int(time.time())
+    signal_dependency_change(db)
     return model
 
 

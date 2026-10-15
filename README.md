@@ -67,8 +67,8 @@ Report commit yêu cầu đầy đủ 16 nhóm sections và minimum availability
 quant assembly hoàn tất. Chính sách hiện tại chưa được bật cho khách trả phí.
 
 Jobs core đã kiểm tra request lặp/conflict, ownership, active limit, cancel, retry lease, version pin,
-incomplete report rejection, settlement và kỳ quota gốc. Chưa có numerical worker hoặc RabbitMQ dispatcher;
-jobs tạo local sẽ nằm trong queue cho đến khi thành phần đó hoàn thành. Quota chưa tự cấp trước billing/admin grants.
+incomplete report rejection, settlement và kỳ quota gốc. Worker/dispatcher có lệnh chạy bên dưới;
+job chưa đủ validated data/model sẽ chờ dependency. Quota chưa tự cấp trước billing/admin grants.
 PostgreSQL concurrency/load vẫn cần evidence riêng trước mở beta.
 
 ## Market data / Vnstock v5
@@ -168,5 +168,46 @@ OpenAPI expose ReportResult. Raw MC paths được bỏ, quantile trajectories v
 
 Test fixture đã đạt single/batch score/action invariance, baseline cache reuse, full report envelope/commentary,
 correction publication order và failed build giữ latest. Baseline statistical model fitting đã smoke riêng;
-test snapshot thay thế phần fitting bằng fixture để kiểm tra orchestration. Chưa có customer worker/dispatcher,
+test snapshot thay thế phần fitting bằng fixture để kiểm tra orchestration. Chưa có
 live full-universe benchmark hoặc model/data scientific gate đạt.
+
+## Worker / dispatcher / dependency runtime
+
+```powershell
+python -m pip install -e './backend[broker]'
+quantik migrate
+# Các process riêng, dùng chung DB và QUANTIK_AMQP_URL:
+quantik dispatcher
+quantik worker
+quantik dependencies
+quantik reconciler
+# Local development không cần broker, chạy một batch rồi dừng:
+quantik worker --transport local --once
+quantik reconciler --once
+# Chỉ sau restore/mất dữ liệu broker; không chạy lặp với backlog đang hoạt động:
+quantik recover-delivery
+```
+
+RabbitMQ durable queues/exchanges, persistent messages, publisher confirms/mandatory routing, prefetch 1
+và dead-letter queue. Dispatcher đánh dấu outbox sau confirm; crash/retry có thể gửi lại, job claim/inbox
+chặn duplicate effects. Consumer ack sau report/settlement và inbox commit; native compute chạy ở bounded
+executor để AMQP heartbeats không bị chặn. Một compute slot mỗi worker process, không nhả CPU slot khi
+user cancel cho tới khi attempt thực sự dừng. Reconciler recover expired leases và thiếu terminal settlement.
+
+Worker pin versions/evaluated_at trước compute; retries giữ snapshot/model/config. Snapshot member/reference
+được đọc qua JSON projection và kiểm checksum riêng (PostgreSQL dùng JSONB), không decode toàn universe
+vào RAM mỗi job. Dispatcher/control runtime không import NumPy/Pandas/LightGBM khi idle. Attempt heartbeat
+20 giây, lease 120 giây, execution timeout beta mặc định 900 giây, dependency deadline 24 giờ.
+
+WAITING_DATA tạo shared dependency request theo target/config, không theo account/symbol. Source/model
+thay đổi rearm request; dirty flag giữ update đến trong lúc builder đang chạy. Không tự gọi provider từ
+customer worker. Job chỉ wake khi inputs thật sự đủ policy; account bị khóa chặn compute/completion và
+release lượt. Request hết active waiters được đóng để tránh retry nền mãi.
+
+Production từ chối guest broker, fixture/degraded flags và local transport. Mặc định development cũng
+yêu cầu LIVE_VALIDATED data + published model; flags nới chỉ dành cho fixture validation có chủ đích.
+Settings validation không in raw input/secrets. Không tự chuyển sang local transport khi RabbitMQ lỗi.
+
+Focused fixture E2E đã đạt API admission → confirmed outbox → worker → report → quota; confirm loss/redelivery
+không nhân report/lượt; strict inputs wait không đánh dấu compute; shared dependency, cancel và account
+revocation sau compute xử lý đúng. Đây chưa phải bằng chứng broker/PostgreSQL thật, load hoặc live scientific gate.

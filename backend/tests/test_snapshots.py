@@ -5,6 +5,10 @@ from datetime import datetime, timezone
 import numpy as np
 import pandas as pd
 import pytest
+from sqlalchemy import func, select, update
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from fastapi.testclient import TestClient
 from alembic import command
 from alembic.config import Config
 
@@ -12,6 +16,11 @@ from service import snapshots
 from service.db import make_engine, session_factory
 from service.market_data import DataError, checksum, normalize_history, normalize_universe, publish_manifest, save_history, save_universe
 from service.models import DataManifest, MarketSnapshot, PublishedSnapshot
+from service.models import Account, AnalysisReport, DependencyRequest, DependencyWaiter, Inbox, Job, JobAttempt, Outbox, QuotaBucket, Reservation
+from service.api import create_app
+from service.analysis_worker import AnalysisWorker, Envelope, wake_waiters
+from service.broker import BrokerUnavailable, dispatch_once
+from service.settings import Settings
 from service.quant import engines as e
 from service.quant.assembly import finalize_member
 from service.quant.configuration import QuantConfig, engine_context
@@ -119,4 +128,113 @@ def test_snapshot_reference_cache_report_invariance_and_publication(tmp_path, mo
     assert error.value.code == "SNAPSHOT_COVERAGE_NOT_READY"
     with sessions() as db:
         assert db.get(PublishedSnapshot, pointer_name).snapshot_id == corrected.id
+
+    # Complete customer flow using this snapshot; fitting is a fixture, transport confirms are injected.
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private, public = tmp_path / "private.pem", tmp_path / "public.pem"
+    private.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption()))
+    public.write_bytes(key.public_key().public_bytes(serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo))
+    settings = Settings(_env_file=None, database_url=url, environment="test", jwt_private_key_path=private,
+        jwt_public_key_path=public, allow_fixture_analysis=True, allow_degraded_analysis=True)
+    worker = AnalysisWorker(sessions, settings)
+    import time
+    with sessions() as db, db.begin():
+        account = Account(google_sub="worker-test", role="user")
+        db.add(account)
+        db.flush()
+        account_id = account.id
+        bucket = QuotaBucket(account_id=account_id, valid_from=int(time.time())-10,
+            valid_until=int(time.time())+3600, quota_total=5, active_limit=2, entitlement_version="fixture")
+        db.add(bucket)
+        db.flush()
+        bucket_id = bucket.id
+
+    class ConfirmedTransport:
+        fail = True
+        events = []
+        def publish(self, envelope):
+            self.events.append(Envelope.decode(envelope.encode()))
+            if self.fail:
+                raise BrokerUnavailable("SIMULATED_CONFIRM_LOSS")
+
+    transport = ConfirmedTransport()
+    with TestClient(create_app(settings)) as client:
+        with sessions() as db, db.begin():
+            access, _ = client.app.state.identity.new_session(db, db.get(Account, account_id))
+        headers = {"Authorization": "Bearer " + access}
+        body = {"symbol": "S00", "target_session": "2026-10-14"}
+        first = client.post("/api/v1/analyses", json=body, headers=headers | {"Idempotency-Key": "worker-flow"})
+        assert first.status_code == 202
+        job_id = first.json()["id"]
+        assert client.post("/api/v1/analyses", json=body,
+            headers=headers | {"Idempotency-Key": "worker-flow"}).json()["id"] == job_id
+        with pytest.raises(BrokerUnavailable):
+            dispatch_once(sessions, transport)
+        with sessions() as db:
+            assert db.scalar(select(Outbox).where(Outbox.job_id == job_id)).published_at is None
+        transport.fail = False
+        assert dispatch_once(sessions, transport) == 1
+        assert worker.process(transport.events[0]) == "SUCCEEDED"
+        assert worker.process(transport.events[1]) == "DUPLICATE"
+        status = client.get(f"/api/v1/analyses/{job_id}", headers=headers).json()
+        assert status["status"] == "SUCCEEDED" and status["quota_effect"] == "CONSUMED"
+        report = client.get("/api/v1/reports/" + status["report_id"], headers=headers)
+        assert report.status_code == 200 and len(report.json()["sections"]) == 16
+        with sessions() as db:
+            assert db.scalar(select(func.count()).select_from(AnalysisReport)) == 1
+            assert db.scalar(select(func.count()).select_from(Inbox)) == 1
+            assert db.get(QuotaBucket, bucket_id).consumed == 1
+        # Strict defaults wait for live data/model and do not start customer compute.
+        waiting = client.post("/api/v1/analyses", json=body,
+            headers=headers | {"Idempotency-Key": "strict-policy"}).json()["id"]
+        strict = settings.model_copy(update={"allow_fixture_analysis": False, "allow_degraded_analysis": False})
+        before = len(transport.events)
+        dispatch_once(sessions, transport)
+        assert AnalysisWorker(sessions, strict).process(transport.events[before]) == "WAITING_DATA"
+        with sessions() as db:
+            assert db.get(Job, waiting).compute_started_at is None
+        assert wake_waiters(sessions, strict) == 0
+        assert wake_waiters(sessions, settings) == 1
+        before = len(transport.events)
+        dispatch_once(sessions, transport)
+        assert worker.process(transport.events[before]) == "SUCCEEDED"
+        # Different symbol requests for the same market context share a dependency key.
+        waiting_ids = []
+        for symbol in ["S00", "S01"]:
+            result = client.post("/api/v1/analyses", json={"symbol": symbol, "target_session": "2026-10-13"},
+                headers=headers | {"Idempotency-Key": "missing-" + symbol})
+            assert result.status_code == 202
+            waiting_ids.append(result.json()["id"])
+        before = len(transport.events)
+        dispatch_once(sessions, transport)
+        for event in transport.events[before:]:
+            assert worker.process(event) == "WAITING_DATA"
+        with sessions() as db:
+            keys = list(db.scalars(select(DependencyWaiter.dependency_key).where(DependencyWaiter.job_id.in_(waiting_ids))))
+            assert len(keys) == 2 and len(set(keys)) == 1
+        for pending_id in waiting_ids:
+            assert client.post(f"/api/v1/analyses/{pending_id}/cancel", headers=headers).json()["quota_effect"] == "RELEASED"
+        # Security revocation after compute starts fences completion and releases the reservation.
+        last = client.post("/api/v1/analyses", json=body,
+            headers=headers | {"Idempotency-Key": "disabled-during-compute"}).json()["id"]
+        from service import analysis_worker
+        real_finalize = analysis_worker.finalize_member
+        def disable_during_compute(*args, **kwargs):
+            result = real_finalize(*args, **kwargs)
+            with sessions() as db, db.begin():
+                db.execute(update(Account).where(Account.id == account_id).values(enabled=False))
+            return result
+        monkeypatch.setattr(analysis_worker, "finalize_member", disable_during_compute)
+        before = len(transport.events)
+        dispatch_once(sessions, transport)
+        assert worker.process(transport.events[before]) == "STOPPED"
+        with sessions() as db:
+            final_job = db.get(Job, last)
+            assert final_job.status == "FAILED" and final_job.reason == "ACCOUNT_DISABLED"
+            assert final_job.compute_started_at is not None
+            quota = db.get(QuotaBucket, bucket_id)
+            assert (quota.consumed, quota.reserved, quota.active_jobs) == (2, 0, 0)
+            assert all(a.stopped_at is not None for a in db.scalars(select(JobAttempt)))
     engine.dispose()

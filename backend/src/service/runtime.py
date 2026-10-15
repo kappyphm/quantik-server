@@ -1,0 +1,70 @@
+"""Explicit worker/control processes with bounded polling and graceful shutdown."""
+import signal
+import threading
+
+from service.broker import RabbitTransport, dispatch_once, recover_delivery
+from service.db import make_engine, session_factory
+from service.dependencies import reconcile_control_once, run_dependency_once
+
+
+def run_service(command, settings, *, once=False, transport="amqp") -> None:
+    stop = threading.Event()
+    previous = {}
+    for name in (signal.SIGINT, signal.SIGTERM):
+        previous[name] = signal.signal(name, lambda *_: stop.set())
+    engine = make_engine(settings.database_url)
+    sessions = session_factory(engine)
+    broker = None
+    try:
+        if command == "recover-delivery":
+            print({"delivery_events_rearmed": recover_delivery(sessions)})
+            return
+        if settings.environment == "production" and command == "worker" and transport != "amqp":
+            raise ValueError("Production requires RabbitMQ transport")
+        worker = None
+        if command == "worker":
+            from service.analysis_worker import AnalysisWorker, local_worker_once
+            worker = AnalysisWorker(sessions, settings)
+        while not stop.is_set():
+            try:
+                if command in {"dispatcher", "worker"} and (command == "dispatcher" or transport == "amqp"):
+                    if broker is None:
+                        broker = RabbitTransport(settings)
+                    if command == "dispatcher":
+                        count = dispatch_once(sessions, broker)
+                        if count:
+                            print({"events_dispatched": count}, flush=True)
+                        broker.connection.process_data_events(time_limit=.1)
+                    else:
+                        broker.consume(worker, once=once, stop=stop)
+                elif command == "worker":
+                    count = local_worker_once(sessions, worker)
+                    if count:
+                        print({"local_events_handled": count}, flush=True)
+                elif command == "dependencies":
+                    run_dependency_once(sessions)
+                elif command == "reconciler":
+                    result = reconcile_control_once(sessions, settings)
+                    if any(result.values()):
+                        print(result, flush=True)
+                else:
+                    raise ValueError("Unknown runtime command")
+            except Exception as exc:
+                print({"process": command, "error_type": type(exc).__name__}, flush=True)
+                if broker:
+                    try:
+                        broker.close()
+                    except Exception:
+                        pass
+                    broker = None
+                if once:
+                    raise SystemExit(1) from None
+            if once:
+                break
+            stop.wait(2 if command != "dependencies" else 5)
+    finally:
+        if broker:
+            broker.close()
+        engine.dispose()
+        for name, handler in previous.items():
+            signal.signal(name, handler)

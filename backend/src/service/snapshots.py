@@ -16,9 +16,7 @@ from service.quant.configuration import QuantConfig, engine_context
 from service.quant.scoring import build_reference
 from service.quant.serialization import json_metrics
 from service.quant.training import predict_snapshot
-
-ENGINE_VERSION = "prototype-v7-cdf1"
-SNAPSHOT_POLICY = "market-snapshot-beta-1"
+from service.quant.versions import ENGINE_VERSION, SNAPSHOT_POLICY
 
 
 def _insert(db):
@@ -149,6 +147,8 @@ def build_market_snapshot(sessions, manifest_id: str, config: QuantConfig, *, mi
         payload = json_metrics({"versions": dependency, "members": reports, "reference": reference,
             "excluded": excluded, "coverage_ratio": len(reports) / len(members), "warnings": warnings,
             "model_age_days": model_age, "data_as_of": index.index[-1].date().isoformat()})
+        payload["reference_checksum"] = checksum(payload["reference"])
+        payload["member_checksums"] = {symbol: checksum(report) for symbol, report in payload["members"].items()}
         hashed = checksum(payload)
         with sessions() as db, db.begin():
             changed = db.execute(update(MarketSnapshot).where(MarketSnapshot.id == snapshot_id,

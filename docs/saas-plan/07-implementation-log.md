@@ -110,3 +110,25 @@ trajectories, meta-label/tracking/Kelly disabled rõ. ReportResult exposed OpenA
 Test fixtures đạt snapshot cache reuse, single/batch invariance, report 16 sections/commentary,
 old-builder/correction ordering và failure không đổi pointer. Migrations đến 0006 đã được tạo;
 PostgreSQL concurrency, live full reports và scientific bootstrap vẫn chưa nghiệm thu.
+
+## Thành phần execution/delivery runtime
+
+Migration 0007: inbox, job_attempts, evaluated_at pin, dependency requests/waiters và dirty latch;
+PostgreSQL snapshot JSONB để projection member/reference. Snapshot policy beta-2 có per-member/reference checksum.
+Worker dùng immutable versions và evaluation clock; heartbeat 20s, lease 120s, execution timeout 900s.
+Account lock kiểm tra lại ở begin_compute/completion; failed security revocation release reservation.
+Attempt stopped_at chỉ ghi khi execution thực sự kết thúc; account slot/cancel không mở thêm compute slot.
+
+RabbitMQ adapter pin Pika 1.3.2, publisher confirm + mandatory + durable/persistent, dead letters và prefetch 1.
+Dispatcher batch round-robin theo account; outbox chỉ mark sau confirm. Consumer bounded executor giữ AMQP I/O
+thread alive, ack sau effects/inbox; Job claim/fencing bảo vệ at-least-once deliveries. Local transport explicit
+cho dev, cấm production. recover-delivery explicit sau restore, không re-publish backlog theo timer.
+
+Shared dependency keyed target/config, không theo account/symbol; ready-source/model signals rearm, dirty flag
+không mất update trong lúc build. Reconciler chỉ wake inputs pass policy và đóng requests không còn active jobs.
+Live data/model strict mặc định; production cấm fixture/degraded flags. Vnstock login vẫn chờ theo người dùng.
+
+Fixture E2E bổ sung vào snapshot check đã đạt: API→outbox→worker→16-section report→quota, lost confirm rồi
+redelivery chỉ một report/consume; strict-data wait chưa compute; wake, shared dependencies, cancel release,
+account disabled sau compute chặn completion/release đúng. CLI local worker/reconciler --once chạy thành công;
+control runtime xác nhận không nạp NumPy/Pandas/LightGBM. Chưa chạy broker/container, PG concurrency hay VPS.

@@ -1,19 +1,21 @@
 """Provider-neutral daily history and immutable manifest contracts."""
+from __future__ import annotations
 import hashlib
 import json
 import re
 import time
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 from zoneinfo import ZoneInfo
 
-import numpy as np
-import pandas as pd
-from sqlalchemy import select, update
+from sqlalchemy import case, select, update
 from sqlalchemy.orm import Session
 
-from service.models import DataManifest, HistoryRevision, MarketRevisionClock, UniverseVersion, new_id
+from service.models import DataManifest, DependencyRequest, HistoryRevision, MarketRevisionClock, UniverseVersion, new_id
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 VN_TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
 InputMode = Literal["COMPLETED_DAILY", "PROVISIONAL_DAILY"]
@@ -30,6 +32,16 @@ def checksum(value: dict) -> str:
         separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
 
 
+def signal_dependency_change(db: Session, target_session: date | None = None) -> None:
+    conditions = [DependencyRequest.kind == "analysis_snapshot", DependencyRequest.status != "CLOSED"]
+    if target_session:
+        conditions.append(DependencyRequest.payload["target_session"].as_string() == target_session.isoformat())
+    running = DependencyRequest.status == "RUNNING"
+    db.execute(update(DependencyRequest).where(*conditions).values(
+        dirty=case((running, True), else_=False), status=case((running, "RUNNING"), else_="PENDING"),
+        next_attempt_at=int(time.time())))
+
+
 @dataclass(frozen=True)
 class DailyHistory:
     symbol: str
@@ -38,6 +50,7 @@ class DailyHistory:
     payload: dict
 
     def frame(self) -> pd.DataFrame:
+        import pandas as pd
         df = pd.DataFrame(self.payload["bars"])
         df.index = pd.DatetimeIndex(pd.to_datetime(df.pop("session")))
         df.attrs.update(self.payload["metadata"])
@@ -48,6 +61,8 @@ def normalize_history(frame: pd.DataFrame, *, symbol: str, kind: Literal["EQUITY
                       source: str, target_session: date, observed_at: datetime,
                       input_mode: InputMode = "COMPLETED_DAILY", minimum_bars: int = 120,
                       provenance: Literal["FIXTURE", "LIVE_UNVERIFIED", "LIVE_VALIDATED"] = "FIXTURE") -> DailyHistory:
+    import numpy as np
+    import pandas as pd
     if observed_at.tzinfo is None:
         raise DataError("OBSERVED_AT_REQUIRES_TIMEZONE")
     local = observed_at.astimezone(VN_TIMEZONE)
@@ -114,6 +129,7 @@ def normalize_history(frame: pd.DataFrame, *, symbol: str, kind: Literal["EQUITY
 
 
 def normalize_universe(frame: pd.DataFrame) -> dict:
+    import pandas as pd
     if frame is None or frame.empty or not {"symbol", "exchange"}.issubset(frame.columns):
         raise DataError("UNIVERSE_SCHEMA")
     members = {}
@@ -187,5 +203,7 @@ def publish_manifest(db: Session, universe: UniverseVersion, histories: dict[str
         .on_conflict_do_nothing(index_elements=["name"]))
     revision = db.scalar(update(MarketRevisionClock).where(MarketRevisionClock.name == "manifest")
         .values(revision=MarketRevisionClock.revision + 1).returning(MarketRevisionClock.revision))
-    return persist_immutable(db, DataManifest, identity, universe_id=universe.id, target_session=target_session,
+    manifest = persist_immutable(db, DataManifest, identity, universe_id=universe.id, target_session=target_session,
         input_mode=input_mode, histories=refs, coverage=coverage, created_at=int(time.time()), revision_order=revision)
+    signal_dependency_change(db, target_session)
+    return manifest

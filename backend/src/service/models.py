@@ -1,6 +1,7 @@
 from uuid import uuid4
 
 from sqlalchemy import Boolean, CheckConstraint, Date, ForeignKey, Integer, JSON, String, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB
 from datetime import date
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -108,6 +109,44 @@ class Job(Base):
     lease_until: Mapped[int | None] = mapped_column(Integer)
     compute_started_at: Mapped[int | None] = mapped_column(Integer)
     reason: Mapped[str | None] = mapped_column(String(100))
+    evaluated_at: Mapped[int | None] = mapped_column(Integer)
+
+
+class JobAttempt(Base):
+    __tablename__ = "job_attempts"
+    __table_args__ = (UniqueConstraint("job_id", "attempt_number"),)
+    token: Mapped[str] = mapped_column(String(36), primary_key=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), index=True)
+    attempt_number: Mapped[int] = mapped_column(Integer)
+    started_at: Mapped[int] = mapped_column(Integer)
+    stopped_at: Mapped[int | None] = mapped_column(Integer)
+    outcome: Mapped[str] = mapped_column(String(32))
+
+
+class Inbox(Base):
+    __tablename__ = "inbox"
+    event_id: Mapped[str] = mapped_column(ForeignKey("outbox.id"), primary_key=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"))
+    completed_at: Mapped[int] = mapped_column(Integer)
+
+
+class DependencyRequest(Base):
+    __tablename__ = "dependency_requests"
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(32))
+    payload: Mapped[dict] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(20), default="PENDING")
+    next_attempt_at: Mapped[int] = mapped_column(Integer)
+    lease_until: Mapped[int] = mapped_column(Integer, default=0)
+    execution_token: Mapped[str | None] = mapped_column(String(36))
+    reason: Mapped[str | None] = mapped_column(String(100))
+    dirty: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class DependencyWaiter(Base):
+    __tablename__ = "dependency_waiters"
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), primary_key=True)
+    dependency_key: Mapped[str] = mapped_column(ForeignKey("dependency_requests.key"), index=True)
 
 
 class Reservation(Base):
@@ -237,7 +276,7 @@ class MarketSnapshot(Base):
     execution_token: Mapped[str | None] = mapped_column(String(36))
     lease_until: Mapped[int] = mapped_column(Integer)
     config: Mapped[dict] = mapped_column(JSON)
-    payload: Mapped[dict | None] = mapped_column(JSON)
+    payload: Mapped[dict | None] = mapped_column(JSON().with_variant(JSONB, "postgresql"))
     payload_checksum: Mapped[str | None] = mapped_column(String(64))
     reason: Mapped[str | None] = mapped_column(String(100))
 

@@ -12,13 +12,13 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
-from service.models import Account, AnalysisReport, Job, Outbox, QuotaBucket, Reservation, UsageLedger, new_id
+from service.models import Account, AnalysisReport, Job, JobAttempt, Outbox, QuotaBucket, Reservation, UsageLedger, new_id
 from service.reports import Report
 from pydantic import ValidationError
 
 TERMINAL = {"SUCCEEDED", "FAILED", "CANCELLED"}
 DEFAULT_POLICY = {"version": "beta-1", "cancel_after_compute_consumes": True,
-    "dependency_deadline_seconds": 86400, "max_attempts": 3}
+    "dependency_deadline_seconds": 86400, "execution_timeout_seconds": 900, "max_attempts": 3}
 
 
 class JobError(Exception):
@@ -117,7 +117,9 @@ def claim(db: Session, job_id: str, lease_seconds: int = 120) -> tuple[Job, str]
         .values(status="RUNNING", execution_token=token, lease_until=now + lease_seconds, attempt=Job.attempt + 1))
     if result.rowcount != 1:
         return None
-    return db.get(Job, job_id), token
+    job = db.get(Job, job_id)
+    db.add(JobAttempt(token=token, job_id=job_id, attempt_number=job.attempt, started_at=now, outcome="RUNNING"))
+    return job, token
 
 
 def live_attempt(db: Session, job_id: str, token: str) -> Job:
@@ -136,6 +138,9 @@ def heartbeat(db: Session, job_id: str, token: str, lease_seconds: int = 120) ->
 
 def begin_compute(db: Session, job_id: str, token: str, versions: dict) -> None:
     job = live_attempt(db, job_id, token)
+    account = db.scalar(select(Account).where(Account.id == job.account_id).with_for_update())
+    if not account or not account.enabled:
+        raise JobError("ACCOUNT_DISABLED", 403)
     required = {"data_manifest", "market_snapshot", "model", "config", "engines"}
     if not required.issubset(versions):
         raise JobError("MISSING_INPUT_VERSIONS", 422)
@@ -144,6 +149,8 @@ def begin_compute(db: Session, job_id: str, token: str, versions: dict) -> None:
     job.pinned_versions = versions.copy()
     if job.compute_started_at is None:
         job.compute_started_at = int(time.time())
+    if job.evaluated_at is None:
+        job.evaluated_at = int(time.time())
 
 
 def wait_data(db: Session, job_id: str, token: str, reason: str) -> None:
@@ -163,6 +170,9 @@ def wake_data(db: Session, job_id: str) -> bool:
 
 def complete(db: Session, job_id: str, token: str, report: dict) -> AnalysisReport:
     job = live_attempt(db, job_id, token)
+    account = db.scalar(select(Account).where(Account.id == job.account_id).with_for_update())
+    if not account or not account.enabled:
+        raise JobError("ACCOUNT_DISABLED", 403)
     if job.compute_started_at is None or report.get("versions") != job.pinned_versions:
         raise JobError("REPORT_VERSION_CONFLICT", 422)
     if report.get("symbol") != job.symbol or report.get("job_id") != job.id:
@@ -178,6 +188,13 @@ def complete(db: Session, job_id: str, token: str, report: dict) -> AnalysisRepo
     settle(db, job, True, "SUCCESS")
     db.flush()
     return record
+
+
+def fail_waiting(db: Session, job_id: str, reason: str) -> None:
+    job = db.scalar(select(Job).where(Job.id == job_id).with_for_update())
+    if job and job.status == "WAITING_DATA":
+        job.status, job.reason = "FAILED", reason
+        settle(db, job, False, reason)
 
 
 def failed_attempt(db: Session, job_id: str, token: str, reason: str, retryable: bool) -> None:
