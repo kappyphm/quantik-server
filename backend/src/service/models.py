@@ -451,3 +451,14 @@ class ScheduledLane(Base):
     kind: Mapped[str] = mapped_column(String(24), primary_key=True)
     execution_token: Mapped[str | None] = mapped_column(String(36))
     lease_until: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class ProcessHeartbeat(Base):
+    __tablename__ = "process_heartbeats"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    role: Mapped[str] = mapped_column(String(40), index=True)
+    started_at: Mapped[int] = mapped_column(Integer)
+    last_seen: Mapped[int] = mapped_column(Integer, index=True)
+    progress_at: Mapped[int] = mapped_column(Integer)
+    state: Mapped[str] = mapped_column(String(16))
+    error_type: Mapped[str | None] = mapped_column(String(100))

@@ -207,3 +207,21 @@ dùng streamed semantic numeric hash cho snapshot dependency/root/member/referen
 giữ legacy hash cho beta2 reader và không đổi history/model identities. One-ULP/type/collision checks đạt.
 Upgrade builder/worker coordinated sau drain, không mixed-recipe rolling deployment. Chi tiết/evidence tại13.
 Final inspection không còn check containers, image/volume inventory giữ nguyên. Provider vẫn không gọi lại.
+
+## Private observability và process heartbeat
+
+Migration0012, admin operations-health và riêng Bearer scrape token (blank disabled); .env local đã có
+token ngẫu nhiên, không ghi vào Git/log. HTTP histogram/counter giới hạn route templates/status classes;
+structured request/runtime logs không chứa path/query/body/headers/raw exception. Heartbeat20s, alive90s,
+retention24h, RUNNING/ERROR/STOPPED; control processes vẫn idle không import numerical libraries.
+
+Aggregates: queue/outbox age, leases, quota counter/reservation/refund consistency, recent1000 attempt
+runtime/wait percentiles, provider windows/cooldown, calendar/expected screening, published model/data,
+payment reconciliation, disk và passive Rabbit counts. Collector cache10s; broker probe chờ tối đa4s,
+chỉ một probe thread/connection khi broker RPC bị treo. Không dùng DB gauges SUM across API replicas.
+
+Ba observability checks đạt, cùng admin/refund critical check; local migrate/scheduler/reconciler --once
+đạt. API thật ready0012, metrics unauthorized401/authorized200 (63 samples), admin login/health200,
+quota anomalies0 và broker_up=false đúng trạng thái broker chưa bật. Không chạy/build Docker ở bước này.
+Prometheus scrape/rule templates đã có nhưng chưa nghiệm thu bằng promtool hoặc notification receiver.
+Host/container metrics, exporter và alert delivery còn thuộc deployment gate; xem14.

@@ -293,3 +293,16 @@ Chạy bằng Python trong shared venv, thay image arguments bằng IDs/tags đ�
 khi không có env kiểm thử riêng. [Evidence và giới hạn](docs/saas-plan/13-local-infrastructure-evidence.md).
 Snapshot recipebeta3 sửa hash số sau JSONB; drain/update đồng bộ builders/workers khi đổi phiên bản.
 Đây vẫn là fixture/local acceptance; Google/SePay/Vnstock live, load trên VPS và backup offsite chưa được xác minh.
+
+## Health, metrics và heartbeat
+
+Migration `0012` thêm heartbeat cho API và các runtime processes. Admin JWT truy cập
+`GET /api/v1/admin/operations/health`; scrape dùng `GET /internal/metrics` với Bearer token riêng
+`QUANTIK_METRICS_TOKEN` (để trống thì disabled). Không public `/internal/` qua reverse proxy.
+Có HTTP histogram/counters, queue/outbox/leases, quota integrity, pipeline/model/calendar/payment
+aggregates, broker probe và process heartbeat. Structured logs dùng route templates, không query/body/secrets.
+
+Focused checks: `python -m pytest backend/tests/test_observability.py -q`.
+Local API ready schema0012, admin health và authenticated scrape đã kiểm chứng; broker local hiện down,
+được báo đúng qua health, không tự bật Docker. Alert YAML chỉ là template, chưa chạy Prometheus/promtool.
+Chi tiết, giới hạn và cách đọc metrics: [14-observability.md](docs/saas-plan/14-observability.md).

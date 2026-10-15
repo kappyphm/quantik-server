@@ -1,0 +1,74 @@
+# Proposed beta thresholds. DB/broker gauges are shared; aggregate replicas with max, never sum.
+groups:
+  - name: quantik-beta
+    rules:
+      - alert: QuantikMetricsUnavailable
+        expr: up{job="quantik-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Quantik scrape failed; check API, token and database
+      - alert: QuantikQuotaIntegrity
+        expr: max(quantik_db_inconsistent_quota_buckets{job="quantik-api"}) > 0 or max(quantik_db_terminal_reservation_leaks{job="quantik-api"}) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Quota counters or terminal reservations require investigation
+      - alert: QuantikBrokerUnavailable
+        expr: max(quantik_broker_up{job="quantik-api"}) == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Broker unavailable or queues not initialized
+      - alert: QuantikDeadLetters
+        expr: max(quantik_broker_dead_messages{job="quantik-api"}) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Inspect dead letters before requeueing
+      - alert: QuantikOutboxStalled
+        expr: max(quantik_db_outbox_oldest_seconds{job="quantik-api"}) > 120
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Check dispatcher and broker confirms
+      - alert: QuantikQueueStalled
+        expr: max(quantik_db_queue_oldest_seconds{job="quantik-api"}) > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Analysis queue is aging; inspect worker capacity and retries
+      - alert: QuantikProcessErrors
+        expr: max by (role) (quantik_processes_alive{job="quantik-api",state="ERROR"}) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Runtime loop repeatedly fails; inspect structured error_type events
+      - alert: QuantikAnalysisWorkerMissing
+        expr: max(quantik_processes_alive{job="quantik-api",role="worker",state="RUNNING"}) == 0 and max(quantik_db_queue_oldest_seconds{job="quantik-api"}) > 120
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Pending analyses have no healthy analysis worker heartbeat
+      - alert: QuantikDiskLow
+        expr: min(quantik_db_disk_free_bytes{job="quantik-api"} / quantik_db_disk_total_bytes{job="quantik-api"}) < 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: API working-directory filesystem has less than ten percent free
+      - alert: QuantikApiErrors
+        expr: sum(rate(quantik_http_requests_total{job="quantik-api",status="5xx"}[5m])) / clamp_min(sum(rate(quantik_http_requests_total{job="quantik-api"}[5m])), 0.001) > 0.05 and sum(increase(quantik_http_requests_total{job="quantik-api"}[5m])) >= 20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: API server errors exceed five percent over at least twenty requests

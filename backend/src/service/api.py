@@ -20,6 +20,8 @@ from service.reports import ReportResult
 from service.models import PublishedScreening, ScreeningResult, ScreeningRun, UniverseVersion, QuotaRefund
 from service.screening_contracts import ScreeningPage
 from service.settings import Settings
+from service.telemetry import HttpMetrics, ProcessMonitor, emit
+from service.operations_health import Collector
 
 
 class AdminLogin(BaseModel):
@@ -48,17 +50,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
     engine = make_engine(settings.database_url)
     sessions = session_factory(engine)
+    http_metrics = HttpMetrics()
+    collector = Collector(sessions, settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.identity = Identity(settings)
         app.state.google = GoogleProvider(settings)
-        yield
-        app.state.google.close()
-        engine.dispose()
+        try:
+            with ProcessMonitor(sessions, "api") as monitor:
+                app.state.monitor = monitor
+                yield
+        finally:
+            app.state.google.close()
+            engine.dispose()
 
     app = FastAPI(title="Quantik API", version="0.1.0", lifespan=lifespan)
     app.state.engine = engine
+    app.state.operations_collector = collector
     bearer = HTTPBearer(auto_error=False)
 
     def db_session():
@@ -68,10 +77,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.middleware("http")
     async def request_id(request: Request, call_next):
         request.state.request_id = str(uuid4())
-        response = await call_next(request)
-        response.headers["X-Request-ID"] = request.state.request_id
-        response.headers["Cache-Control"] = "no-store"
-        return response
+        started, status = time.perf_counter(), 500
+        try:
+            response = await call_next(request)
+            status = response.status_code
+            response.headers["X-Request-ID"] = request.state.request_id
+            response.headers["Cache-Control"] = "no-store"
+            return response
+        finally:
+            route = getattr(request.scope.get("route"), "path", "unmatched")
+            duration = time.perf_counter()-started
+            http_metrics.observe(request.method, route, status, duration)
+            monitor = getattr(request.app.state, "monitor", None)
+            if monitor:
+                monitor.progress()
+            if route not in {"/health/live", "/health/ready", "/internal/metrics"}:
+                emit("http.request", request_id=request.state.request_id, method=request.method if request.method in
+                    {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"} else "OTHER",
+                    route=route, status=status, duration_seconds=round(duration, 6))
 
     @app.exception_handler(AuthError)
     async def auth_error(request: Request, exc: AuthError):
@@ -351,4 +374,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(admin_router(admin, db_session))
     from service.config_api import router as config_router
     app.include_router(config_router(settings, admin, db_session))
+    from service.observability_api import router as observability_router
+    app.include_router(observability_router(settings, admin, collector, http_metrics))
     return app

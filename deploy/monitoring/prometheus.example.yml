@@ -1,0 +1,16 @@
+# Template: set target and credentials_file for the actual private deployment.
+# No Alertmanager receiver is configured; this does not send notifications.
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+rule_files:
+  - quantik.rules.yml
+scrape_configs:
+  - job_name: quantik-api
+    metrics_path: /internal/metrics
+    scrape_timeout: 10s
+    authorization:
+      type: Bearer
+      credentials_file: /run/secrets/quantik_metrics_token
+    static_configs:
+      - targets: ['127.0.0.1:8000']

@@ -87,6 +87,9 @@ def test_admin_suspension_and_compensating_refund(tmp_path, monkeypatch):
         late_refund = client.post(f"/api/v1/admin/jobs/{consumed[1]}/quota-refund", json=body,
             headers=admin_auth | {"Idempotency-Key": "expired-refund"})
         assert late_refund.status_code == 200 and late_refund.json()["bucket_id"] == bucket_id
+        from service.operations_health import quota_inconsistencies
+        with sessions() as db:
+            assert quota_inconsistencies(db) == 0  # Compensating refunds preserve the original CONSUMED reservation.
         assert client.get("/api/v1/me/entitlements", headers=user_auth).json()["remaining"] == 4
 
         with sessions() as db, db.begin():
