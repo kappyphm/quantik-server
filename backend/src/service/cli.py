@@ -16,7 +16,7 @@ from service.settings import Settings
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="quantik")
-    parser.add_argument("command", choices=["migrate", "generate-keys", "seed-admin", "ingest-market", "train-model", "publish-model", "build-snapshot", "worker", "dispatcher", "dependencies", "reconciler", "recover-delivery", "screen-market"])
+    parser.add_argument("command", choices=["migrate", "generate-keys", "seed-admin", "ingest-market", "train-model", "publish-model", "build-snapshot", "worker", "dispatcher", "dependencies", "reconciler", "recover-delivery", "screen-market", "seed-operations", "scheduler", "schedule-worker"])
     parser.add_argument("--target-session", type=date.fromisoformat)
     parser.add_argument("--start", type=date.fromisoformat, default=date(2021, 1, 1))
     parser.add_argument("--symbol", action="append")
@@ -27,15 +27,32 @@ def main() -> None:
     parser.add_argument("--slot", choices=["AM", "PM"])
     parser.add_argument("--input-mode", choices=["COMPLETED_DAILY", "PROVISIONAL_DAILY"], default="COMPLETED_DAILY")
     parser.add_argument("--minimum-bars", type=int, default=1)
+    parser.add_argument("--kind", choices=["INGEST", "SCREEN", "SNAPSHOT", "TRAIN"])
     args = parser.parse_args()
     load_dotenv()
     settings = Settings()
     Path("runtime").mkdir(exist_ok=True)
     if args.command == "migrate":
         command.upgrade(Config("backend/alembic.ini"), "head")
-    elif args.command in {"worker", "dispatcher", "dependencies", "reconciler", "recover-delivery"}:
+    elif args.command == "seed-operations":
+        from sqlalchemy import select
+        from service.models import Account
+        from service.calendar_reference import seed_defaults
+        engine = make_engine(settings.database_url)
+        try:
+            with session_factory(engine)() as db, db.begin():
+                actor = db.scalar(select(Account).where(Account.role == "admin", Account.enabled.is_(True)).limit(1))
+                if actor is None:
+                    parser.error("seed-operations requires an existing enabled seed-admin")
+                result = seed_defaults(db, actor.id)
+            print({"active_versions": result})
+        finally:
+            engine.dispose()
+    elif args.command in {"worker", "dispatcher", "dependencies", "reconciler", "recover-delivery", "scheduler", "schedule-worker"}:
+        if args.command == "schedule-worker" and not args.kind:
+            parser.error("schedule-worker requires --kind INGEST|SCREEN|SNAPSHOT|TRAIN")
         from service.runtime import run_service
-        run_service(args.command, settings, once=args.once, transport=args.transport)
+        run_service(args.command, settings, once=args.once, transport=args.transport, kind=args.kind)
     elif args.command == "generate-keys":
         private_path, public_path = settings.jwt_private_key_path, settings.jwt_public_key_path
         if private_path.exists() or public_path.exists():

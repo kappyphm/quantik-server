@@ -79,8 +79,10 @@ def promote_model(db, model_id: str) -> ModelVersion:
     return model
 
 
-def train_manifest(sessions, manifest_id: str, config: QuantConfig, policy: TrainingPolicy | None = None) -> ModelVersion:
+def train_manifest(sessions, manifest_id: str, config: QuantConfig, policy: TrainingPolicy | None = None, *, operation_guard=None) -> ModelVersion:
     with sessions() as db:
+        if operation_guard:
+            operation_guard(db)
         manifest = db.get(DataManifest, manifest_id)
         if not manifest:
             raise DataError("MANIFEST_NOT_FOUND")
@@ -90,5 +92,7 @@ def train_manifest(sessions, manifest_id: str, config: QuantConfig, policy: Trai
         incumbent_artifact = incumbent.artifact if incumbent else None
     artifact = train_artifact(data, index, sectors, config, policy, incumbent_artifact)
     with sessions() as db, db.begin():
+        if operation_guard:
+            operation_guard(db)
         manifest = db.get(DataManifest, manifest_id)
         return save_candidate(db, manifest, artifact, config)

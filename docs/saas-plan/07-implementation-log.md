@@ -174,3 +174,19 @@ Bounded admin users/jobs/payments/subscriptions/audit/models/data-health views k
 Focused admin API check và existing job lifecycle đã đạt; có refund replay/conflict, rollback, expired bucket,
 security stop/stale token, re-enable không revive session, read routes và audit. PG concurrency chưa xác minh.
 General config rollback, bank refunds, scheduler và deployment vẫn còn. Policy chi tiết tại mục 11.
+
+## Thành phần scheduled operations
+
+Migration0011 thêm immutable/CAS operational configs và calendar, durable unique tasks/cursor, global lanes.
+Admin config activation/rollback/audit và task history API. Reviewed calendar2026 có248 phiên theo HOSE/HNX
+và New Year update; không ngoại suy2027. Scheduler giữ cursor/catch-up, daily slots/deadlines, Sunday training
+theo last actual session, lease/heartbeat/fencing. Publication/candidate/ingestion effects có operation guard.
+
+Provider auto-ingestion yêu cầu cả operation config và env gate; cả hai vẫn tắt. Không login lại Vnstock.
+Ingestion resume tránh refetch các mã đã xong và giữ retry-after; manifest chỉ đọc projected headers giảm RAM.
+Calendar-aware latest freshness xét expected slot thay vì báo stale chỉ vì cuối tuần/lễ. Heavy imports lazy.
+
+Focused scheduler/resume/readiness/admin config/screening checks đạt; local migrate/seed/scheduler --once
+và provider-disabled worker --once chạy thành công. Lịch đã materialize19 tasks,16 quá hạn được ghi nhận rõ
+ở lần bootstrap, không có provider calls. Chưa xác minh PG races, scheduled live run hoặc deployment.
+Chi tiết tại mục12; observability/deployment/backup/load và live integration gates vẫn còn.

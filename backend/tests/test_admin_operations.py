@@ -115,6 +115,15 @@ def test_admin_suspension_and_compensating_refund(tmp_path, monkeypatch):
         for route in ("users", "jobs", "payments", "subscriptions", "models", "data-health", "audit"):
             response = client.get("/api/v1/admin/"+route, headers=admin_auth)
             assert response.status_code == 200, (route, response.text)
+        config_url = "/api/v1/admin/configs/OPERATIONS"
+        assert client.post(config_url+"/versions", json={"payload": {"retry_seconds": 0}}, headers=admin_auth).status_code == 422
+        configured = client.post(config_url+"/versions", json={"payload": {}}, headers=admin_auth)
+        assert configured.status_code == 201, configured.text
+        version_id = configured.json()["id"]
+        activation = {"expected_version": None, "reason": "Activate validated operation policy"}
+        assert client.post(config_url+f"/{version_id}/activate", json=activation, headers=admin_auth).status_code == 200
+        assert client.get(config_url, headers=admin_auth).json()["active_version"] == version_id
+        assert client.get("/api/v1/admin/scheduled-tasks", headers=admin_auth).status_code == 200
         with sessions() as db:
             events = list(db.scalars(select(AuditEvent).where(AuditEvent.action == "admin.customer_state")))
             assert any(e.actor_id == staff_id and e.details["before"] is True and e.details["after"] is False for e in events)

@@ -58,7 +58,7 @@ def cached_baseline(sessions, key: str, compute) -> dict:
         raise
 
 
-def build_market_snapshot(sessions, manifest_id: str, config: QuantConfig, *, minimum_coverage: float = .8) -> MarketSnapshot:
+def build_market_snapshot(sessions, manifest_id: str, config: QuantConfig, *, minimum_coverage: float = .8, operation_guard=None) -> MarketSnapshot:
     if not 0 < minimum_coverage <= 1:
         raise DataError("INVALID_SNAPSHOT_COVERAGE")
     now = int(time.time())
@@ -151,6 +151,8 @@ def build_market_snapshot(sessions, manifest_id: str, config: QuantConfig, *, mi
         payload["member_checksums"] = {symbol: checksum(report) for symbol, report in payload["members"].items()}
         hashed = checksum(payload)
         with sessions() as db, db.begin():
+            if operation_guard:
+                operation_guard(db)
             changed = db.execute(update(MarketSnapshot).where(MarketSnapshot.id == snapshot_id,
                 MarketSnapshot.execution_token == token, MarketSnapshot.lease_until > int(time.time()))
                 .values(status="READY", execution_token=None, lease_until=0, payload=payload, payload_checksum=hashed))

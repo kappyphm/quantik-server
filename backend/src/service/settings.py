@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     sepay_transfer_prefix: str = Field(default="", validation_alias="SEPAY_TRANSFER_PREFIX", max_length=50)
     sepay_requires_transfer_prefix: bool = Field(default=False, validation_alias="SEPAY_REQUIRES_TRANSFER_PREFIX")
     payments_enabled: bool = False
+    scheduled_provider_enabled: bool = False
 
     @model_validator(mode="after")
     def production_checks(self) -> "Settings":

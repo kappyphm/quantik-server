@@ -266,3 +266,17 @@ POST /api/v1/admin/users/{id}/state khóa/mở customer có reason; khóa revoke
 fence/release jobs đang chờ/chạy. Có bounded GET views users/jobs/payments/subscriptions/audit/models/data-health
 dưới /api/v1/admin. Chi tiết: [11-admin-operations.md](docs/saas-plan/11-admin-operations.md).
 Focused checks: test_admin_operations.py và test_jobs.py đã đạt; chưa có PG race/load acceptance.
+
+## Lịch tự động và cấu hình có phiên bản
+
+Migration0011. Chạy `quantik seed-operations` sau migrate/seed-admin để khởi tạo policy và lịch giao dịch2026
+đã đối chiếu thông báo HOSE/HNX. `quantik scheduler` lập lịch bền vững;
+`quantik schedule-worker --kind SCREEN` (hoặc SNAPSHOT/TRAIN) thực thi tương ứng. Các lệnh hỗ trợ `--once`.
+Provider INGEST cần cả config ingestion_enabled và QUANTIK_SCHEDULED_PROVIDER_ENABLED; mặc định đều tắt
+trong lúc chờ Vnstock. Không tự đăng nhập lại provider chỉ vì scheduler chạy.
+
+Admin có /api/v1/admin/configs/{kind} để tạo version/activate/rollback bằng expected_version + reason và
+/api/v1/admin/scheduled-tasks để xem task/retry/reason. Có unique slots, global lanes, leases/heartbeat,
+deadline, restart recovery và source/model gates. Screening freshness dùng calendar khi có coverage.
+Lịch2027 không được suy đoán; cần import bản có nguồn. Xem [12-scheduled-operations.md](docs/saas-plan/12-scheduled-operations.md)
+cho đầy đủ commands, timings, config và giới hạn kiểm chứng. Chưa có supervision/acceptance trên VPS.

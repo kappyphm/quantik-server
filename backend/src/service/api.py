@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select, text
-from datetime import date
+from datetime import date, datetime, timezone
 
 from service.db import SCHEMA_REVISION, make_engine, session_factory
 from service.identity import AuthError, Identity
@@ -278,10 +278,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         reasons = []
         if attempt and (attempt.target_session, attempt.slot) >= (run.target_session, run.slot) and attempt.status != "READY":
             reasons.append("LATEST_RUN_UNAVAILABLE")
-        if int(time.time()) - run.published_at > 36*3600:
+        from service.operational_config import active_version, TradingCalendar
+        from service.calendar_reference import expected_screening
+        calendar_version = active_version(db, "TRADING_CALENDAR")
+        calendar_status = "NOT_CONFIGURED"
+        if calendar_version:
+            calendar = TradingCalendar.model_validate(calendar_version.payload)
+            from zoneinfo import ZoneInfo
+            now = datetime.now(timezone.utc)
+            if calendar.start <= now.astimezone(ZoneInfo("Asia/Ho_Chi_Minh")).date() <= calendar.end:
+                calendar_status = "READY"
+                expected = expected_screening(calendar, slot, now)
+                if expected and (run.target_session, run.slot) < expected:
+                    reasons.append("EXPECTED_SLOT_UNPUBLISHED")
+            else:
+                calendar_status = "OUT_OF_RANGE"
+                reasons.append("CALENDAR_OUT_OF_RANGE")
+        if calendar_status != "READY" and int(time.time()) - run.published_at > 36*3600:
             reasons.append("PUBLICATION_AGE")
         return {**screening_header(run), "summary": run.summary, "stale": bool(reasons), "stale_reasons": reasons,
-            "latest_attempt": screening_header(attempt) if attempt else None}
+            "latest_attempt": screening_header(attempt) if attempt else None, "calendar_status": calendar_status}
 
     @app.get("/api/v1/screenings/{run_id}/results", response_model=ScreeningPage)
     def screening_results(run_id: str, group: Literal["ALL", "OVERALL", "STRONG", "ACCUMULATION", "DISTRIBUTION"] = "ALL",
@@ -333,4 +349,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(billing_router(settings, user, admin, db_session))
     from service.admin_api import router as admin_router
     app.include_router(admin_router(admin, db_session))
+    from service.config_api import router as config_router
+    app.include_router(config_router(settings, admin, db_session))
     return app

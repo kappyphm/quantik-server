@@ -91,6 +91,8 @@ class VnstockProvider:
         asset = self.market.equity(symbol) if kind == "EQUITY" else self.market.index(symbol)
         frame = self.call(lambda: asset.ohlcv(start=start.isoformat(), end=target_session.isoformat(),
             interval="1D", source=source, floating=None))
-        return normalize_history(frame, symbol=symbol, kind=kind, source=source, target_session=target_session,
+        history = normalize_history(frame, symbol=symbol, kind=kind, source=source, target_session=target_session,
             observed_at=datetime.now(timezone.utc), input_mode=input_mode, minimum_bars=minimum_bars,
             provenance="LIVE_UNVERIFIED")
+        history.payload["metadata"]["requested_start"] = start.isoformat()
+        return history

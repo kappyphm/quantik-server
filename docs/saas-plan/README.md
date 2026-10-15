@@ -21,6 +21,7 @@ Tài liệu đủ để bắt đầu implementation. Các mục PROPOSED là thi
 | [09 — Screening policy](09-screening-policy.md) | 21 criteria, availability, scoring và publication |
 | [10 — Billing policy](10-billing-policy.md) | Prepaid plans, SePay matching, renewal và đối soát |
 | [11 — Admin operations](11-admin-operations.md) | Customer lock, quota refund, audit và operational views |
+| [12 — Scheduled operations](12-scheduled-operations.md) | Versioned configs/calendar, durable daily/weekly tasks và recovery |
 
 ## Quy ước
 

@@ -43,9 +43,7 @@ def validate_history(history, target, mode, slot, now, allow_fixture):
 
 
 def run_screening(sessions, target_session, slot: str, *, manifest_id: str | None = None,
-                  now: datetime | None = None, allow_fixture: bool = False) -> ScreeningRun:
-    from service.quant.screening import evaluate_symbol, market_context, rank_results
-    from service.quant.screening_legacy import RegimeAdjustment
+                  now: datetime | None = None, allow_fixture: bool = False, operation_guard=None) -> ScreeningRun:
     if slot not in {"AM", "PM"}:
         raise DataError("INVALID_SCREENING_SLOT")
     now = now or datetime.now(timezone.utc)
@@ -57,6 +55,8 @@ def run_screening(sessions, target_session, slot: str, *, manifest_id: str | Non
     mode = "PROVISIONAL_DAILY" if slot == "AM" else "COMPLETED_DAILY"
     token = new_id()
     with sessions() as db, db.begin():
+        if operation_guard:
+            operation_guard(db)
         db.execute(insert_for(db)(ScreeningRun).values(id=new_id(), target_session=target_session, slot=slot,
             status="WAITING_DATA", policy=POLICY, created_at=int(now.timestamp()), lease_until=0)
             .on_conflict_do_nothing(index_elements=["target_session", "slot"]))
@@ -97,6 +97,8 @@ def run_screening(sessions, target_session, slot: str, *, manifest_id: str | Non
             selected_manifest_id = manifest.id
             history_ids = manifest.histories.copy()
             source_is_live = universe.payload.get("provenance") == "LIVE_VALIDATED" and index_record.payload["metadata"].get("provenance") == "LIVE_VALIDATED"
+        from service.quant.screening import evaluate_symbol, market_context, rank_results
+        from service.quant.screening_legacy import RegimeAdjustment
         context = market_context(index, mode)
         results, unavailable, ready_count = [], {}, 0
         for symbol, instrument in sorted(members.items()):
@@ -144,6 +146,8 @@ def run_screening(sessions, target_session, slot: str, *, manifest_id: str | Non
             "source_mode": "LIVE_VALIDATED" if source_is_live else "FIXTURE"}
         maps = {group: {symbol: i+1 for i, symbol in enumerate(order)} for group, order in rankings.items() if group != "TOP"}
         with sessions() as db, db.begin():
+            if operation_guard:
+                operation_guard(db)
             run = db.scalar(select(ScreeningRun).where(ScreeningRun.id == run_id).with_for_update())
             if run.execution_token != token or run.lease_until <= int(time.time()):
                 raise DataError("SCREENING_LEASE_LOST", True)

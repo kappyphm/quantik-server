@@ -398,3 +398,56 @@ class QuotaRefund(Base):
     reason: Mapped[str] = mapped_column(String(500))
     evidence: Mapped[str] = mapped_column(String(1000))
     created_at: Mapped[int] = mapped_column(Integer)
+
+
+class RuntimeConfigVersion(Base):
+    __tablename__ = "runtime_config_versions"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(32), index=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[int] = mapped_column(Integer)
+    actor_id: Mapped[str | None] = mapped_column(ForeignKey("accounts.id"))
+
+
+class ActiveRuntimeConfig(Base):
+    __tablename__ = "active_runtime_configs"
+    kind: Mapped[str] = mapped_column(String(32), primary_key=True)
+    version_id: Mapped[str] = mapped_column(ForeignKey("runtime_config_versions.id"))
+
+
+class SchedulerCursor(Base):
+    __tablename__ = "scheduler_cursors"
+    name: Mapped[str] = mapped_column(String(32), primary_key=True)
+    planned_through: Mapped[date] = mapped_column(Date)
+    config_id: Mapped[str] = mapped_column(ForeignKey("runtime_config_versions.id"))
+    calendar_id: Mapped[str] = mapped_column(ForeignKey("runtime_config_versions.id"))
+
+
+class ScheduledTask(Base):
+    __tablename__ = "scheduled_tasks"
+    __table_args__ = (UniqueConstraint("kind", "target_session", "slot"),
+        CheckConstraint("status IN ('PENDING','RUNNING','WAITING','SUCCEEDED','FAILED','SKIPPED')"))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    kind: Mapped[str] = mapped_column(String(24))
+    target_session: Mapped[date] = mapped_column(Date)
+    slot: Mapped[str] = mapped_column(String(4))
+    config_id: Mapped[str] = mapped_column(ForeignKey("runtime_config_versions.id"))
+    calendar_id: Mapped[str] = mapped_column(ForeignKey("runtime_config_versions.id"))
+    scheduled_at: Mapped[int] = mapped_column(Integer)
+    deadline: Mapped[int] = mapped_column(Integer)
+    next_attempt_at: Mapped[int] = mapped_column(Integer, index=True)
+    created_at: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(16), default="PENDING", index=True)
+    attempt: Mapped[int] = mapped_column(Integer, default=0)
+    started_at: Mapped[int | None] = mapped_column(Integer)
+    execution_token: Mapped[str | None] = mapped_column(String(36))
+    lease_until: Mapped[int] = mapped_column(Integer, default=0)
+    reason: Mapped[str | None] = mapped_column(String(100))
+    result: Mapped[dict | None] = mapped_column(JSON)
+
+
+class ScheduledLane(Base):
+    __tablename__ = "scheduled_lanes"
+    kind: Mapped[str] = mapped_column(String(24), primary_key=True)
+    execution_token: Mapped[str | None] = mapped_column(String(36))
+    lease_until: Mapped[int] = mapped_column(Integer, default=0)

@@ -7,7 +7,7 @@ from service.db import make_engine, session_factory
 from service.dependencies import reconcile_control_once, run_dependency_once
 
 
-def run_service(command, settings, *, once=False, transport="amqp") -> None:
+def run_service(command, settings, *, once=False, transport="amqp", kind=None) -> None:
     stop = threading.Event()
     previous = {}
     for name in (signal.SIGINT, signal.SIGTERM):
@@ -47,6 +47,15 @@ def run_service(command, settings, *, once=False, transport="amqp") -> None:
                     result = reconcile_control_once(sessions, settings)
                     if any(result.values()):
                         print(result, flush=True)
+                elif command == "scheduler":
+                    from service.scheduling import tick
+                    result = tick(sessions, settings)
+                    if once or result.get("created") or result.get("recovered") or result["state"] != "READY":
+                        print(result, flush=True)
+                elif command == "schedule-worker":
+                    from service.scheduled_worker import run_once
+                    if run_once(sessions, settings, kind):
+                        print({"scheduled_operation_handled": kind}, flush=True)
                 else:
                     raise ValueError("Unknown runtime command")
             except Exception as exc:
@@ -61,7 +70,7 @@ def run_service(command, settings, *, once=False, transport="amqp") -> None:
                     raise SystemExit(1) from None
             if once:
                 break
-            stop.wait(2 if command != "dependencies" else 5)
+            stop.wait(30 if command == "scheduler" else (5 if command in {"dependencies", "schedule-worker"} else 2))
     finally:
         if broker:
             broker.close()
