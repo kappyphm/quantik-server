@@ -65,7 +65,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             app.state.google.close()
             engine.dispose()
 
-    app = FastAPI(title="Quantik API", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Quantik API", version="1.0.0", lifespan=lifespan)
     app.state.engine = engine
     app.state.operations_collector = collector
     bearer = HTTPBearer(auto_error=False)

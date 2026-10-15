@@ -10,8 +10,8 @@ from service.dependencies import reconcile_control_once, run_dependency_once
 from service.telemetry import ProcessMonitor, emit
 
 
-def run_service(command, settings, *, once=False, transport="amqp", kind=None) -> None:
-    stop = threading.Event()
+def run_service(command, settings, *, once=False, transport="amqp", kind=None, stop=None) -> None:
+    stop = stop if stop is not None else threading.Event()
     previous = {}
     for name in (signal.SIGINT, signal.SIGTERM):
         previous[name] = signal.signal(name, lambda *_: stop.set())
