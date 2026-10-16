@@ -1,4 +1,5 @@
 """Critical payment checks with real JWT roles and a temporary migrated DB; no bank calls."""
+from entitlement_fixtures import fail_job
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -124,7 +125,7 @@ def test_prepaid_payment_contract_and_atomic_entitlement(tmp_path, monkeypatch):
         with sessions() as db, db.begin():
             job = jobs.admit(db, owner_id, "FPT", datetime.now(ZoneInfo("Asia/Ho_Chi_Minh")).date(), "paid-job")
             assert job.bucket_id == periods[0].bucket_id
-            jobs.cancel(db, owner_id, job.id)
+            fail_job(db, job.id)
 
         negative = order("mismatches")
         for number, changes, expected in [
@@ -198,7 +199,7 @@ def test_prepaid_payment_contract_and_atomic_entitlement(tmp_path, monkeypatch):
             assert bucket.daily_created == 1
             for index in range(28):
                 item = jobs.admit(db, owner_id, "FPT", datetime.now(ZoneInfo("Asia/Ho_Chi_Minh")).date(), f"daily-{index}")
-                jobs.cancel(db, owner_id, item.id)  # Internal settlement does not return admission budget.
+                fail_job(db, item.id)  # Internal settlement does not return admission budget.
             old_day = jobs.admit(db, owner_id, "FPT", datetime.now(ZoneInfo("Asia/Ho_Chi_Minh")).date(), "daily-last")
             old_id = old_day.id
             assert jobs.admit(db, owner_id, "FPT", datetime.now(ZoneInfo("Asia/Ho_Chi_Minh")).date(), "daily-last").id == old_id
@@ -214,7 +215,7 @@ def test_prepaid_payment_contract_and_atomic_entitlement(tmp_path, monkeypatch):
                 jobs.admit(db, owner_id, "FPT", datetime.now(ZoneInfo("Asia/Ho_Chi_Minh")).date(), "cross-day-active-limit")
             assert limit.value.code == "ACTIVE_JOB_LIMIT"
             with sessions() as db, db.begin():
-                jobs.cancel(db, owner_id, old_id)
+                fail_job(db, old_id)
                 jobs.admit(db, owner_id, "FPT", datetime.now(ZoneInfo("Asia/Ho_Chi_Minh")).date(), "next-day-second")
         assert client.post(f"/api/v1/analyses/{old_id}/cancel", headers=user_auth).status_code == 404
         assert client.post(f"/api/v1/admin/jobs/{old_id}/quota-refund", json={}, headers=admin_auth).status_code == 404

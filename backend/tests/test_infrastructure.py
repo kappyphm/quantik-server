@@ -1,4 +1,5 @@
 """Opt-in local real-infrastructure checks; fixtures never claim scientific/live acceptance."""
+from entitlement_fixtures import paid_bucket, fail_job, complete_job
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import os
@@ -60,8 +61,7 @@ def customer(sessions, total=20, active=3):
         account = Account(role="user", google_sub=uuid4().hex)
         db.add(account)
         db.flush()
-        bucket = QuotaBucket(account_id=account.id, valid_from=int(time.time())-10, valid_until=int(time.time())+3600,
-            quota_total=total, active_limit=active, entitlement_version="explicit-infrastructure-fixture")
+        bucket = paid_bucket(db, account.id, valid_from=int(time.time())-10, valid_until=int(time.time())+3600, quota_total=total, active_limit=active)
         db.add(bucket)
         db.flush()
         return account.id, bucket.id
@@ -99,11 +99,11 @@ def test_postgres_races_and_atomic_financial_effects(infrastructure):
         assert (bucket.reserved, bucket.active_jobs, bucket.consumed) == (3, 3, 0)
     for job_id in successful:
         with sessions() as db, db.begin():
-            jobs.cancel(db, owner, job_id)
+            fail_job(db, job_id)
     repeated = parallel(lambda index: admit(index, "one-idempotent-job"))
     assert all(isinstance(result, str) for result in repeated) and len(set(repeated)) == 1
     with sessions() as db, db.begin():
-        jobs.cancel(db, owner, repeated[0])
+        fail_job(db, repeated[0])
 
     race_id = admit(100)
     with sessions() as db, db.begin():
@@ -118,15 +118,15 @@ def test_postgres_races_and_atomic_financial_effects(infrastructure):
     def terminate(index):
         with sessions() as db, db.begin():
             if index % 2:
-                return jobs.cancel(db, owner, race_id).status
+                return fail_job(db, race_id).status
             return jobs.complete(db, race_id, token, report).id
 
     parallel(terminate)
     with sessions() as db:
         job = db.get(Job, race_id)
-        assert job.status in {"SUCCEEDED", "CANCELLED"}
+        assert job.status in {"SUCCEEDED", "FAILED"}
         reservation = db.scalar(select(Reservation).where(Reservation.job_id == race_id))
-        assert reservation.state == "CONSUMED"
+        assert reservation.state == ("CONSUMED" if job.status == "SUCCEEDED" else "RELEASED")
         assert db.scalar(select(func.count()).select_from(UsageLedger).where(UsageLedger.reservation_id == reservation.id,
             UsageLedger.effect.in_(["CONSUMED", "RELEASED"]))) == 1
         assert db.scalar(select(func.count()).select_from(AnalysisReport).where(AnalysisReport.job_id == race_id)) == int(job.status == "SUCCEEDED")
@@ -165,16 +165,22 @@ def test_postgres_races_and_atomic_financial_effects(infrastructure):
         assert db.scalar(select(func.count()).select_from(BankPayment).where(BankPayment.order_id == order_id,
             BankPayment.status == "APPLIED")) == 1
 
+    # Financial correction requires a successful execution regardless of which
+    # terminal operation won the worker race above.
+    refund_job_id = admit(101)
+    with sessions() as db, db.begin():
+        complete_job(db, refund_job_id)
+
     def refund(index):
         with sessions() as db, db.begin():
-            return admin.refund_quota(db, race_id, staff_ids[index % 4], "refund-"+str(index),
+            return admin.refund_quota(db, refund_job_id, staff_ids[index % 4], "refund-"+str(index),
                 "Verified fixture correction", "Original execution and settlement inspected").id
 
     refunded = parallel(refund)
     assert len([value for value in refunded if isinstance(value, str)]) == 1
     with sessions() as db:
-        assert db.get(QuotaBucket, bucket_id).consumed == 0
-        assert db.scalar(select(func.count()).select_from(QuotaRefund).join(Reservation).where(Reservation.job_id == race_id)) == 1
+        assert db.get(QuotaBucket, bucket_id).consumed == int(job.status == "SUCCEEDED")
+        assert db.scalar(select(func.count()).select_from(QuotaRefund).join(Reservation).where(Reservation.job_id == refund_job_id)) == 1
 
 
 def test_real_broker_confirm_duplicate_restart_and_dead_letter(infrastructure):

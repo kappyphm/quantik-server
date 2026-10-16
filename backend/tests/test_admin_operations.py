@@ -1,3 +1,4 @@
+from entitlement_fixtures import paid_bucket, complete_job
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -38,8 +39,7 @@ def test_admin_suspension_without_public_cancellation_or_refund(tmp_path, monkey
             db.flush()
             owner_id, staff_id = owner.id, staff.id
             user_auth, admin_auth = [{"Authorization": "Bearer "+client.app.state.identity.new_session(db, a)[0]} for a in (owner, staff)]
-            bucket = QuotaBucket(account_id=owner_id, valid_from=int(time.time())-10, valid_until=int(time.time())+1000,
-                quota_total=5, active_limit=3, entitlement_version="fixture-period")
+            bucket = paid_bucket(db, owner_id, valid_from=int(time.time())-10, valid_until=int(time.time())+1000, quota_total=5, active_limit=3)
             db.add(bucket)
             db.flush()
             bucket_id = bucket.id
@@ -49,7 +49,7 @@ def test_admin_suspension_without_public_cancellation_or_refund(tmp_path, monkey
                 job = jobs.admit(db, owner_id, "FPT", today, f"consume-{index}")
                 claimed, token = jobs.claim(db, job.id)
                 jobs.begin_compute(db, job.id, token, versions)
-                jobs.cancel(db, owner_id, job.id)
+                complete_job(db, job.id)
                 consumed.append(job.id)
         assert client.post(f"/api/v1/admin/jobs/{consumed[0]}/quota-refund", json={}, headers=admin_auth).status_code == 404
         current_id = bucket_id

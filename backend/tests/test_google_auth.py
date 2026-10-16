@@ -1,3 +1,4 @@
+from entitlement_fixtures import paid_bucket
 import time
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
@@ -14,7 +15,7 @@ from sqlalchemy import select
 from service.api import create_app
 from service.db import make_engine, session_factory
 from service.identity import seed_admin
-from service.models import Account, QuotaBucket
+from service.models import Account, QuotaBucket, Subscription
 from service.settings import Settings
 
 
@@ -87,9 +88,17 @@ def test_google_exchange_browser_binding_and_role_isolation(tmp_path, monkeypatc
         owner_id = client.get("/api/v1/me", headers=headers).json()["id"]
         assert client.get("/api/v1/me", headers=headers).json() == {
             "id": owner_id, "role": "user", "display_name": "Người dùng kiểm thử", "email": "verified@example.test"}
+        # A legacy/orphan bucket must not grant product access in any environment.
         with session_factory(engine)() as db, db.begin():
             db.add(QuotaBucket(account_id=owner_id, valid_from=int(time.time())-10,
-                valid_until=int(time.time())+1000, quota_total=5, active_limit=2, entitlement_version="fixture"))
+                valid_until=int(time.time())+1000, quota_total=99, active_limit=2, entitlement_version="orphan"))
+        orphan_rights = client.get("/api/v1/me/entitlements", headers=headers).json()
+        assert orphan_rights["active"] is False and orphan_rights["remaining"] == 0
+        denied = client.post("/api/v1/analyses", json={"symbol": "FPT", "target_session": "2026-10-14"},
+            headers=headers | {"Idempotency-Key": "orphan-denied"})
+        assert denied.status_code == 403 and denied.json()["code"] == "NO_ENTITLEMENT"
+        with session_factory(engine)() as db, db.begin():
+            bucket_id = paid_bucket(db, owner_id, valid_from=int(time.time())-10, valid_until=int(time.time())+1000, quota_total=5, active_limit=2).id
         analysis_body = {"symbol": "FPT", "target_session": "2026-10-14"}
         job_headers = headers | {"Idempotency-Key": "http-fixture-job"}
         result = client.post("/api/v1/analyses", json=analysis_body, headers=job_headers)
@@ -100,7 +109,15 @@ def test_google_exchange_browser_binding_and_role_isolation(tmp_path, monkeypatc
         assert client.get("/api/v1/analyses/unknown", headers=headers).status_code == 404
         result = client.post(f"/api/v1/analyses/{job_id}/cancel", headers=headers)
         assert result.status_code == 404
-        assert client.get("/api/v1/me/usage", headers=headers).json()["buckets"][0]["reserved"] == 1
+        buckets = client.get("/api/v1/me/usage", headers=headers).json()["buckets"]
+        assert next(bucket for bucket in buckets if bucket["id"] == bucket_id)["reserved"] == 1
+        with session_factory(engine)() as db, db.begin():
+            period = db.scalar(select(Subscription).where(Subscription.account_id == owner_id))
+            period.valid_until = int(time.time())-1
+        assert client.get("/api/v1/me/entitlements", headers=headers).json()["active"] is False
+        denied = client.post("/api/v1/analyses", json=analysis_body,
+            headers=headers | {"Idempotency-Key": "expired-subscription-denied"})
+        assert denied.status_code == 403 and denied.json()["code"] == "NO_ENTITLEMENT"
         assert client.post("/api/v1/auth/exchange", json={"code": exchange},
             headers=origin | {"Cookie": f"quantik_oauth_browser={browser}"}).status_code == 401
         assert client.post("/api/v1/auth/refresh", headers=origin).status_code == 200

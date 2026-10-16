@@ -1,3 +1,4 @@
+from entitlement_fixtures import paid_bucket
 import service
 import os
 from dataclasses import asdict, replace
@@ -146,8 +147,7 @@ def test_snapshot_reference_cache_report_invariance_and_publication(tmp_path, mo
         db.add(account)
         db.flush()
         account_id = account.id
-        bucket = QuotaBucket(account_id=account_id, valid_from=int(time.time())-10,
-            valid_until=int(time.time())+3600, quota_total=5, active_limit=2, entitlement_version="fixture")
+        bucket = paid_bucket(db, account_id, valid_from=int(time.time())-10, valid_until=int(time.time())+3600, quota_total=5, active_limit=2)
         db.add(bucket)
         db.flush()
         bucket_id = bucket.id

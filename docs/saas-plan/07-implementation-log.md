@@ -259,3 +259,18 @@ order contract account_number; không đổi public order schema. Không gọi p
 encryption_ready=true/sourceENV/revision0; chưa tự import key env vào DB hoặc bật payments/provider.
 Tài liệu/API fields/master-key recovery tại16. Hai thay đổi supervisor dang dở trước đó giữ riêng, không
 thuộc component này; không tiếp tục triển khai supervisor theo yêu cầu dừng trước đó.
+
+## Subscription entitlement cleanup — 2026-10-16
+
+Analysis admission and `/me/entitlements` now require an active subscription.
+Unlinked quota buckets grant no access, including when an existing subscription
+has expired. Regression checks cover both cases through the HTTP API.
+
+Removed the obsolete analysis cancellation service and cancellation policy field.
+Requests retain their daily admission count after worker failures; retry and
+settlement remain idempotent. Historical CANCELLED records remain readable.
+Earlier cancellation policy notes in this log describe superseded behavior.
+
+Tests create paid subscription fixtures only in isolated databases and settle
+jobs through worker success/failure. Runtime services contain no testing grant
+or orphan-bucket fallback. No schema or operational account-data change is needed.

@@ -169,9 +169,6 @@ def router(settings: Settings, user: Callable, admin: Callable, db_session: Call
         now = int(time.time())
         from service.daily_limits import current_bucket, day_bounds
         bucket = current_bucket(db, account.id, now)
-        bucket = bucket or db.scalar(select(QuotaBucket).where(QuotaBucket.account_id == account.id,
-            QuotaBucket.valid_from <= now, QuotaBucket.valid_until > now)
-            .order_by(QuotaBucket.valid_from.desc(), QuotaBucket.id).limit(1))
         plan = db.get(PlanVersion, bucket.entitlement_version) if bucket else None
         period = db.get(Subscription, bucket.subscription_id) if bucket and bucket.subscription_id else None
         upcoming = db.scalar(select(Subscription).where(Subscription.account_id == account.id,
@@ -186,7 +183,6 @@ def router(settings: Settings, user: Callable, admin: Callable, db_session: Call
             "created_today": bucket.daily_created if bucket else 0,
             "daily_reset_at": day_bounds(now)[1] if bucket else None,
             "quota_period": "DAY", "quota_timezone": "Asia/Ho_Chi_Minh",
-            "cancel_after_compute_consumes": False,
             "plan": billing.plan_view(plan) if plan else None,
             "next_subscription": billing.period_view(db, upcoming) if upcoming else None}
 

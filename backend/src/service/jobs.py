@@ -17,7 +17,7 @@ from service.reports import Report
 from pydantic import ValidationError
 
 TERMINAL = {"SUCCEEDED", "FAILED", "CANCELLED"}
-DEFAULT_POLICY = {"version": "beta-1", "cancel_after_compute_consumes": True,
+DEFAULT_POLICY = {"version": "daily-admission-1",
     "dependency_deadline_seconds": 86400, "execution_timeout_seconds": 900, "max_attempts": 3}
 
 
@@ -53,9 +53,6 @@ def admit(db: Session, account_id: str, symbol: str, target_session: date,
         return existing
     from service.daily_limits import current_bucket
     bucket = current_bucket(db, account_id, now)
-    bucket = bucket or db.scalar(select(QuotaBucket).where(QuotaBucket.account_id == account_id,
-        QuotaBucket.valid_from <= now, QuotaBucket.valid_until > now)
-        .order_by(QuotaBucket.valid_from.desc(), QuotaBucket.id).limit(1).with_for_update())
     if not bucket:
         raise JobError("NO_ENTITLEMENT", 403)
     if bucket.daily_created >= bucket.quota_total:
@@ -101,17 +98,6 @@ def settle(db: Session, job: Job, consume: bool, reason: str) -> None:
         .values(reserved=QuotaBucket.reserved - 1, consumed=QuotaBucket.consumed + int(consume),
             active_jobs=QuotaBucket.active_jobs - 1))
     db.add(UsageLedger(reservation_id=reservation.id, effect=state, occurred_at=int(time.time()), reason=reason))
-
-
-def cancel(db: Session, account_id: str, job_id: str) -> Job:
-    job = owned_job(db, account_id, job_id, lock=True)
-    if job.status in TERMINAL:
-        return job
-    job.status, job.reason = "CANCELLED", "USER_CANCEL"
-    job.execution_token, job.lease_until = None, None
-    settle(db, job, bool(job.compute_started_at and job.policy["cancel_after_compute_consumes"]), job.reason)
-    db.flush()
-    return job
 
 
 def claim(db: Session, job_id: str, lease_seconds: int = 120) -> tuple[Job, str] | None:
@@ -248,9 +234,9 @@ def reconcile(db: Session) -> int:
         .where(Job.status.in_(TERMINAL), Reservation.state == "RESERVED")
         .order_by(Job.created_at).limit(100).with_for_update(skip_locked=True)))
     for job in unsettled:
-        consume = job.status == "SUCCEEDED" or (job.status == "CANCELLED"
-            and bool(job.compute_started_at) and job.reason == "USER_CANCEL"
-            and job.policy["cancel_after_compute_consumes"])
+        # Historical CANCELLED rows remain readable; releasing a reservation
+        # never restores the daily admission count. No new cancellation exists.
+        consume = job.status == "SUCCEEDED"
         settle(db, job, consume, job.reason or "TERMINAL_REPAIR")
         changed += 1
     return changed
