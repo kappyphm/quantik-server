@@ -79,7 +79,7 @@ def ingest_market(settings: Settings, start: date, target_session: date,
                     record = save_history(db, history)
                 print(f"Ingested {symbol}: {len(history.payload['bars'])} bars, revision {record.id}")
             except DataError as exc:
-                if exc.code.startswith("TASK_"):
+                if exc.code.startswith("TASK_") or exc.code == "BACKFILL_YIELD_TO_SCHEDULE":
                     raise
                 failures[symbol] = exc.code
                 retry_after = max(retry_after or 0, exc.retry_after or 0) or None

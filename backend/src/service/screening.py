@@ -44,7 +44,8 @@ def validate_history(history, target, mode, slot, now, allow_fixture):
 
 
 def run_screening(sessions, target_session, slot: str, *, manifest_id: str | None = None,
-                  now: datetime | None = None, allow_fixture: bool = False, operation_guard=None) -> ScreeningRun:
+                  now: datetime | None = None, allow_fixture: bool = False, operation_guard=None,
+                  backfill: bool = False) -> ScreeningRun:
     if slot not in {"AM", "PM"}:
         raise DataError("INVALID_SCREENING_SLOT")
     now = now or datetime.now(timezone.utc)
@@ -56,8 +57,12 @@ def run_screening(sessions, target_session, slot: str, *, manifest_id: str | Non
     mode = "PROVISIONAL_DAILY" if slot == "AM" else "COMPLETED_DAILY"
     token = new_id()
     with sessions() as db, db.begin():
-        if operation_guard:
-            operation_guard(db)
+        task = operation_guard(db) if operation_guard else None
+        if backfill:
+            if (task is None or task.kind != "BACKFILL" or task.target_session != target_session
+                    or slot != "PM" or now < datetime.combine(target_session, day_time(16), VN)):
+                raise DataError("INVALID_BACKFILL_OPERATION")
+            deadline = datetime.fromtimestamp(task.deadline, timezone.utc)
         db.execute(insert_for(db)(ScreeningRun).values(id=new_id(), target_session=target_session, slot=slot,
             status="WAITING_DATA", policy=POLICY, created_at=int(now.timestamp()), lease_until=0)
             .on_conflict_do_nothing(index_elements=["target_session", "slot"]))
@@ -144,6 +149,7 @@ def run_screening(sessions, target_session, slot: str, *, manifest_id: str | Non
         if now + timedelta(seconds=time.monotonic()-started) >= deadline:
             raise DataError("SCREENING_DEADLINE")
         summary = {"manifest_id": selected_manifest_id, "input_mode": mode, "market_context": context,
+            "execution_mode": "BACKFILL" if backfill else "SCHEDULED",
             "history_coverage_ratio": coverage, "expected_symbols": len(members), "ready_symbols": ready_count,
             "unavailable": unavailable, "top_symbols": rankings["TOP"],
             "ranking_counts": {group: len(values) for group, values in rankings.items()},

@@ -59,6 +59,24 @@ def execute(sessions: sessionmaker[Session], settings: Settings, task: Scheduled
     with sessions() as db, db.begin():
         guard(db)
         policy = scheduling.policy_for(db, task)
+    if task.kind == "BACKFILL":
+        from service.models import ScreeningRun
+        from service.ingestion import ingest_market
+        from service.screening import run_screening
+        with sessions() as db:
+            ready = db.scalar(select(ScreeningRun).where(ScreeningRun.target_session == task.target_session,
+                ScreeningRun.slot == "PM", ScreeningRun.status == "READY"))
+            if ready:
+                return {"screening_run_id": ready.id, "status": "READY", "reused": True}
+        result = ingest_market(settings, task.target_session-timedelta(days=policy.history_calendar_days),
+            task.target_session, input_mode="COMPLETED_DAILY", operation_guard=guard, resume=True)
+        if not result["manifest_id"]:
+            raise DataError("INGESTION_MANIFEST_NOT_READY", True, result.get("retry_after"))
+        run = run_screening(sessions, task.target_session, "PM", manifest_id=result["manifest_id"],
+            allow_fixture=settings.allow_fixture_analysis, operation_guard=guard, backfill=True)
+        if run.status != "READY":
+            raise DataError(run.reason or "SCREENING_NOT_READY", run.status == "WAITING_DATA")
+        return {"screening_run_id": run.id, "status": "READY", "manifest_id": result["manifest_id"]}
     if task.kind == "INGEST":
         # Explicit environment switch is independent of admin config, respecting provider pauses.
         if not settings.scheduled_provider_enabled:

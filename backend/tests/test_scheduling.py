@@ -199,4 +199,14 @@ def test_ingestion_resume_preserves_provider_budget(tmp_path, monkeypatch):
     assert calls == ["VNINDEX", "AAA", "BBB", "BBB", "CCC", "DDD", "CCC"]
     fourth = ingestion.ingest_market(settings, start, target, resume=True)
     assert fourth["manifest_id"] == third["manifest_id"] and len(calls) == 7
+    guarded = []
+
+    def yield_after_index(db):
+        guarded.append(True)
+        if len(guarded) >= 6:
+            raise DataError("BACKFILL_YIELD_TO_SCHEDULE", True)
+
+    with pytest.raises(DataError, match="BACKFILL_YIELD_TO_SCHEDULE"):
+        ingestion.ingest_market(settings, start, target, operation_guard=yield_after_index)
+    assert calls[7:] == ["VNINDEX"]  # Stop at the boundary, before fetching equities.
     engine.dispose()

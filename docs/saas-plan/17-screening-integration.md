@@ -43,3 +43,19 @@ Local configuration was explicitly activated with audit: enabled=true, ingestion
 -FE production + proxy + FastAPI + SQLite browser check passed at1440px/390px against isolated synthetic fixtures. It verifies actual auth cookies, two result routes, run IDs, criteria, no overflow/JS errors and created_today=0/remaining20. This is not a live-market acceptance claim.
 
 No schema migration is required. No payment/user records were changed for screening QA in the operational database. Temporary browser-test accounts/orders/payments exist only inside a disposable test database.
+
+## Completed-session backfill
+
+Admin can request a completed daily session without changing automatic slot deadlines:
+
+- `GET /api/v1/admin/screening/backfill-options`: last 60 completed sessions from the active exchange calendar, operation gates and latest backfill task.
+- `POST /api/v1/admin/screening/backfills`: optional `target_session` (defaults to latest completed), mandatory reason and `Idempotency-Key`. Returns an asynchronous task with HTTP202.
+- `GET /api/v1/admin/scheduled-tasks/{id}`: persisted status, attempts, next retry, deadline and reason.
+
+Only sessions at or after16:00 Vietnam time are eligible. This path uses COMPLETED_DAILY data; it cannot reconstruct missing morning observations. The active calendar must cover today. Both ingestion/screening operation switches and the environment provider gate must be enabled. A single pending/running backfill is permitted; repeated requests for the same session share a task. The audit log records actor, reason, request identity and previous failure/attempt count. Replaying the same key never restarts a failed task; an explicit new request can restart it with a fresh bounded deadline.
+
+The existing SCREEN worker consumes BACKFILL tasks, first resuming ingestion then screening. No additional worker service is required. SCREEN/BACKFILL acquire INGEST then SCREEN lanes, excluding overlapping ingestion or screening. Heartbeats renew both lanes; leases and active operator gates fence all data/publication effects. Backfills yield at guarded boundaries when an automatic ingest/screen task is due, then resume on retry; saved histories are retained. Provider budgets/cooldowns remain shared. Retry and total processing time use the pinned OPERATIONS policy. Missing coverage, provider failure or expiry do not publish partial results. Existing READY runs are reused without refetching or recomputing.
+
+Screening permits an extended deadline only for a guarded BACKFILL task matching the completed session. The actual execution/publication time is retained and summary.execution_mode=BACKFILL identifies a late run. ALL/PM pointers advance only to an equal or newer session, preserving newer publications. Automatic deadlines and AM observation validation remain unchanged. This uses existing task/audit tables; no migration is required.
+
+Verification: focused scheduling/screening checks and an isolated HTTP→worker→real screening computation test cover admin authorization, incomplete-session denial, idempotency conflict, shared lanes, heartbeat, monotonic publication, provider failure, operator pause, expiry and explicit retry. Provider I/O in that test is synthetic, confined to its temporary database. Live provider status must be reported separately.
