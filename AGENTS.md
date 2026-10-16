@@ -21,7 +21,7 @@ rg -n 'OPEN|PROPOSED' docs/saas-plan # Find unresolved decisions
 python -c "import ast,pathlib; [ast.parse(p.read_text(encoding='utf-8-sig'), filename=str(p)) for p in pathlib.Path('docs/prototype').glob('*.py')]"
 ```
 
-The Python command checks syntax without importing prototypes or fetching data. Backend install/run/test commands are in root README.md and backend/pyproject.toml. Activate the shared $HOME/.venv before Python commands. No Docker deployment exists yet; do not present planned commands as working tooling.
+The Python command checks syntax without importing prototypes or fetching data. Backend install/run/test commands are in root README.md and backend/pyproject.toml. Activate the shared $HOME/.venv before Python commands. Docker deployment resources and the verified trial release report are in deploy/production/; follow its README and keep secrets outside build contexts.
 
 ## Coding Style & Naming Conventions
 

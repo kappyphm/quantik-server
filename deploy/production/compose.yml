@@ -1,0 +1,200 @@
+name: quantik
+
+x-app-environment: &app-env
+  QUANTIK_ENVIRONMENT: production
+  QUANTIK_DATABASE_URL: ${QUANTIK_DATABASE_URL:?Set QUANTIK_DATABASE_URL}
+  QUANTIK_AMQP_URL: ${QUANTIK_AMQP_URL:?Set QUANTIK_AMQP_URL}
+  QUANTIK_PUBLIC_ORIGIN: https://quantik.io.vn
+  QUANTIK_JWT_PRIVATE_KEY_PATH: /run/secrets/jwt-private.pem
+  QUANTIK_JWT_PUBLIC_KEY_PATH: /run/secrets/jwt-public.pem
+  QUANTIK_INTEGRATION_ENCRYPTION_KEY_PATH: /run/secrets/integration-encryption.key
+  QUANTIK_NUMERICAL_THREADS: "1"
+  QUANTIK_ALLOW_FIXTURE_ANALYSIS: "false"
+  QUANTIK_ALLOW_DEGRADED_ANALYSIS: "false"
+  QUANTIK_PAYMENTS_ENABLED: ${QUANTIK_PAYMENTS_ENABLED:-false}
+  QUANTIK_SCHEDULED_PROVIDER_ENABLED: ${QUANTIK_SCHEDULED_PROVIDER_ENABLED:-false}
+  QUANTIK_METRICS_TOKEN: ${QUANTIK_METRICS_TOKEN:-}
+  QUANTIK_RELEASE_ID: ${QUANTIK_RELEASE_ID:?Set QUANTIK_RELEASE_ID}
+  GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+  GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+  VNSTOCK_API_KEY: ${VNSTOCK_API_KEY:-}
+  SEPAY_WEBHOOK_API_KEY: ${SEPAY_WEBHOOK_API_KEY:-}
+  SEPAY_BANK_CODE: ${SEPAY_BANK_CODE:-}
+  SEPAY_ACCOUNT_NUMBER: ${SEPAY_ACCOUNT_NUMBER:-}
+  SEPAY_ACCOUNT_NAME: ${SEPAY_ACCOUNT_NAME:-}
+  SEPAY_TRANSFER_PREFIX: ${SEPAY_TRANSFER_PREFIX:-}
+  SEPAY_REQUIRES_TRANSFER_PREFIX: ${SEPAY_REQUIRES_TRANSFER_PREFIX:-false}
+
+x-logs: &logs
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+
+x-backend: &backend
+  image: ${BACKEND_IMAGE:?Set BACKEND_IMAGE}
+  environment: *app-env
+  restart: unless-stopped
+  init: true
+  user: "10001:10001"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs: ["/tmp:size=128m,mode=1777"]
+  volumes:
+    - ./secrets:/run/secrets:ro
+    - runtime:/app/runtime
+  networks: [private]
+  pids_limit: 128
+  mem_limit: 192m
+  logging: *logs
+  stop_grace_period: 45s
+  depends_on:
+    postgres:
+      condition: service_healthy
+    rabbitmq:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:17-bookworm}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: quantik
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?Set POSTGRES_ADMIN_PASSWORD}
+      QUANTIK_DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-db.sh:/docker-entrypoint-initdb.d/01-quantik.sh:ro
+    networks: [private]
+    mem_limit: 512m
+    shm_size: 128m
+    logging: *logs
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U quantik -d quantik"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  rabbitmq:
+    image: ${RABBITMQ_IMAGE:-rabbitmq:4.2}
+    hostname: rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: quantik
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD}
+      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "+S 2:2"
+    volumes: [rabbitmq-data:/var/lib/rabbitmq]
+    networks: [private]
+    mem_limit: 384m
+    logging: *logs
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD, rabbitmq-diagnostics, -q, ping]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+
+  api:
+    <<: *backend
+    mem_limit: 384m
+    ports: ["127.0.0.1:8000:8000"]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=4)"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  web:
+    image: ${FRONTEND_IMAGE:?Set FRONTEND_IMAGE}
+    restart: unless-stopped
+    init: true
+    environment:
+      QUANTIK_API_URL: http://api:8000
+      QUANTIK_APP_ORIGIN: https://quantik.io.vn
+      QUANTIK_UPSTREAM_ORIGIN: https://quantik.io.vn
+    ports: ["127.0.0.1:3000:3000"]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:size=64m,mode=1777"]
+    volumes: [next-cache:/app/frontend/.next/cache]
+    networks: [private]
+    mem_limit: 512m
+    pids_limit: 128
+    logging: *logs
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  worker:
+    <<: *backend
+    command: [quantik, worker]
+    mem_limit: 1024m
+    cpus: 1.0
+    stop_grace_period: 960s
+  dispatcher:
+    <<: *backend
+    command: [quantik, dispatcher]
+  dependencies:
+    <<: *backend
+    command: [quantik, dependencies]
+    mem_limit: 1536m
+    cpus: 1.0
+  reconciler:
+    <<: *backend
+    command: [quantik, reconciler]
+  scheduler:
+    <<: *backend
+    command: [quantik, scheduler]
+
+  migrate:
+    <<: *backend
+    profiles: [tools]
+    restart: "no"
+    command: [quantik, migrate]
+    environment:
+      <<: *app-env
+      QUANTIK_ADMIN_USERNAME: ${QUANTIK_ADMIN_USERNAME:-admin}
+      QUANTIK_ADMIN_PASSWORD: ${QUANTIK_ADMIN_PASSWORD:-}
+
+  ingest:
+    <<: *backend
+    profiles: [pipelines]
+    command: [quantik, schedule-worker, --kind, INGEST]
+    mem_limit: 512m
+  screen:
+    <<: *backend
+    profiles: [pipelines]
+    command: [quantik, schedule-worker, --kind, SCREEN]
+    mem_limit: 1024m
+    cpus: 1.0
+  snapshot:
+    <<: *backend
+    profiles: [pipelines]
+    command: [quantik, schedule-worker, --kind, SNAPSHOT]
+    mem_limit: 1536m
+    cpus: 1.0
+  train:
+    <<: *backend
+    profiles: [training]
+    command: [quantik, schedule-worker, --kind, TRAIN]
+    mem_limit: 1536m
+    cpus: 1.0
+
+networks:
+  private:
+volumes:
+  postgres-data:
+  rabbitmq-data:
+  runtime:
+  next-cache:

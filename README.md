@@ -2,6 +2,8 @@
 
 Backend SaaS phân tích chứng khoán Việt Nam. Thiết kế tại [docs/saas-plan](docs/saas-plan/README.md).
 
+Bản deploy thử production trên VPS và hướng dẫn Docker: [deploy/production](deploy/production/README.md). Báo cáo nghiệm thu và bảo mật: [2026-10-16](deploy/production/DEPLOYMENT-2026-10-16.md).
+
 ## Chạy local (PowerShell, từ repository root)
 
 ```powershell

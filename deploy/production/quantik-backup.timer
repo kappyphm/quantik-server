@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Quantik local backup at 02:00 Vietnam time
+
+[Timer]
+OnCalendar=*-*-* 02:00:00 Asia/Ho_Chi_Minh
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

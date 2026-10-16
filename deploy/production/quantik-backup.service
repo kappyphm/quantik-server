@@ -1,0 +1,10 @@
+[Unit]
+Description=Quantik local PostgreSQL backup
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh /opt/quantik/backup.sh
+UMask=0077
+Nice=10
