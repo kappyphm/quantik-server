@@ -110,7 +110,16 @@ def collect(db: Session, *, now: int | None = None) -> dict:
             calendar_status = "OUT_OF_RANGE"
     reconciliation_since = db.scalar(select(func.min(BankPayment.received_at)).where(BankPayment.status == "RECONCILIATION"))
     disk = shutil.disk_usage(".")
+    publication = db.get(PublishedScreening, "ALL")
+    screening = db.get(ScreeningRun, publication.run_id) if publication else None
+    attempt = db.scalar(select(ScreeningRun).order_by(ScreeningRun.target_session.desc(), ScreeningRun.slot.desc()).limit(1))
+    operations = active_version(db, "OPERATIONS")
     return {"collected_at": now, "schema_ready": ready, "jobs": grouped(db, Job),
+        "screening": {"published": {"id": screening.id, "target_session": screening.target_session.isoformat(),
+            "slot": screening.slot, "published_at": screening.published_at,
+            "coverage": (screening.summary or {}).get("history_coverage_ratio")} if screening else None,
+            "latest_attempt": {"status": attempt.status, "reason": attempt.reason, "target_session": attempt.target_session.isoformat(), "slot": attempt.slot} if attempt else None,
+            "operations": {key: operations.payload.get(key) for key in ("enabled", "ingestion_enabled", "screening_enabled")} if operations else None},
         "queue_oldest_seconds": age(oldest_queue), "waiting_data_oldest_seconds": age(oldest_wait),
         "expired_job_leases": count(Job, Job.status == "RUNNING", Job.lease_until <= now),
         "outbox_pending": count(Outbox, Outbox.published_at.is_(None)), "outbox_oldest_seconds": age(oldest_outbox),
@@ -170,6 +179,7 @@ class Collector:
                 return self.cached
             with self.sessions() as db:
                 data = collect(db)
+            data["screening"]["scheduled_provider_enabled"] = self.settings.scheduled_provider_enabled
             data["broker"] = self.broker.snapshot()
             self.cached, self.expires_at = data, time.monotonic()+10
             return data

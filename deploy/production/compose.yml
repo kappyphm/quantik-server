@@ -169,12 +169,10 @@ services:
 
   ingest:
     <<: *backend
-    profiles: [pipelines]
     command: [quantik, schedule-worker, --kind, INGEST]
     mem_limit: 512m
   screen:
     <<: *backend
-    profiles: [pipelines]
     command: [quantik, schedule-worker, --kind, SCREEN]
     mem_limit: 1024m
     cpus: 1.0

@@ -20,6 +20,9 @@ def reusable_history(record, start: date, minimum_bars: int) -> bool:
         return False
     if metadata.get("provenance") not in {"LIVE_UNVERIFIED", "LIVE_VALIDATED"} or checksum(record.payload) != record.checksum:
         return False
+    from service.screening_validation import eligible
+    if not eligible(record.payload):
+        return False
     if record.input_mode == "PROVISIONAL_DAILY":
         observed = datetime.fromisoformat(metadata["observed_at"]).astimezone(ZoneInfo("Asia/Ho_Chi_Minh"))
         return observed.date() == record.target_session and time(11, 30) <= observed.time() < time(13)
@@ -81,8 +84,12 @@ def ingest_market(settings: Settings, start: date, target_session: date,
                 failures[symbol] = exc.code
                 retry_after = max(retry_after or 0, exc.retry_after or 0) or None
                 print(f"Skipped {symbol}: {exc.code}")
-                if exc.retryable or exc.code.startswith("VNSTOCK_AUTH") or exc.code.startswith("VNSTOCK_TIER"):
-                    break  # Resume later; do not hammer the provider on a shared outage/budget.
+                shared_failure = exc.code.startswith(("PROVIDER_", "VNSTOCK_")) and (
+                    exc.retryable or exc.code.startswith(("VNSTOCK_AUTH", "VNSTOCK_TIER")))
+                if symbol == "VNINDEX" or shared_failure:
+                    break  # Index is mandatory; outages/budgets stop the shared source.
+                # A suspended/new symbol lacking today's bar must not starve the
+                # rest of the market. Publication still requires >=95% coverage.
         with sessions() as db, db.begin():
             if operation_guard:
                 operation_guard(db)

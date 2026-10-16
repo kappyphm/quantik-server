@@ -281,11 +281,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "published_at": run.published_at}
 
     def require_screening_source(run):
-        if not settings.allow_fixture_analysis and run.summary.get("source_mode") != "LIVE_VALIDATED":
+        if not settings.allow_fixture_analysis and (run.summary or {}).get("source_mode") not in {"LIVE_VALIDATED", "LIVE_SCREENING_VALIDATED"}:
             raise jobs.JobError("SCREENING_LIVE_DATA_REQUIRED", 503)
 
     @app.get("/api/v1/screenings/latest")
     def screening_latest(slot: Literal["ALL", "AM", "PM"] = "ALL", account=Depends(user), db=Depends(db_session)):
+        from service.screening_access import require_access
+        require_access(db, account.id)
         query = select(ScreeningRun)
         if slot != "ALL":
             query = query.where(ScreeningRun.slot == slot)
@@ -293,7 +295,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         pointer = db.get(PublishedScreening, slot)
         if not pointer:
             return JSONResponse(status_code=503, content={"code": "SCREENING_NOT_READY",
-                "latest_attempt": screening_header(attempt) if attempt else None})
+                "latest_attempt": screening_header(attempt) if attempt else None,
+                "retry_after_seconds": 60}, headers={"Retry-After": "60"})
         run = db.get(ScreeningRun, pointer.run_id)
         require_screening_source(run)
         reasons = []
@@ -318,12 +321,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if calendar_status != "READY" and int(time.time()) - run.published_at > 36*3600:
             reasons.append("PUBLICATION_AGE")
         return {**screening_header(run), "summary": run.summary, "stale": bool(reasons), "stale_reasons": reasons,
+            "server_now": int(time.time()), "refresh_after_seconds": 60,
+            "schedule": {"timezone": "Asia/Ho_Chi_Minh", "AM": "11:30–12:55", "PM": "16:00–17:30"},
             "latest_attempt": screening_header(attempt) if attempt else None, "calendar_status": calendar_status}
 
     @app.get("/api/v1/screenings/{run_id}/results", response_model=ScreeningPage)
     def screening_results(run_id: str, group: Literal["ALL", "OVERALL", "STRONG", "ACCUMULATION", "DISTRIBUTION"] = "ALL",
                           cursor: str | None = None, limit: int = Query(default=50, ge=1, le=200),
                           account=Depends(user), db=Depends(db_session)):
+        from service.screening_access import require_access
+        require_access(db, account.id)
         run = db.get(ScreeningRun, run_id)
         if not run:
             raise jobs.JobError("NOT_FOUND", 404)

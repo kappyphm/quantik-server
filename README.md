@@ -218,6 +218,10 @@ revocation sau compute xử lý đúng. Đây chưa phải bằng chứng broker
 
 ## Screening
 
+FE integration, paid read access, screening-only provider evidence and local/Compose workers:
+[17-screening-integration.md](docs/saas-plan/17-screening-integration.md).
+This scope does not certify adjusted history for Quant/model training.
+
 ```powershell
 quantik migrate
 # Chạy khi provider đã được cấp slot/xác minh; AM chỉ lấy observations trong lunch window.

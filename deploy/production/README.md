@@ -55,7 +55,7 @@ sh deploy.sh
 
 The script validates Compose, starts PostgreSQL/RabbitMQ, backs up an existing schema, explicitly migrates, optionally seeds the initial admin, seeds reviewed operation defaults, and waits for application readiness. API startup does not run migrations. Install nginx.conf only after local upstream smoke checks pass, run `nginx -t`, then reload Nginx. The preserved `/opt/quantik/nginx.maintenance.conf` can restore a 503 maintenance response while recovering a failed release.
 
-Default services: postgres, rabbitmq, api, web, worker, dispatcher, dependencies, reconciler, scheduler. The pipelines and training profiles are intentionally off during the trial. Starting them requires provider/device verification, live data/model acceptance, and a measured RAM/concurrency budget. A single analysis worker is configured. Docker memory limits are ceilings, not reservations; simultaneously enabling all heavy processes can exceed VPS capacity.
+Default services now also include ingest and screen, so the scheduler has consumers for screening tasks. Provider ingestion still requires both QUANTIK_SCHEDULED_PROVIDER_ENABLED=true and the active OPERATIONS ingestion switch. Snapshot and training remain optional profiles; screening does not require a published Quant model. Do not enable those heavier profiles without their separate data/model acceptance and a measured RAM/concurrency budget. A single analysis worker is configured. Docker memory limits are ceilings, not reservations; simultaneously enabling all heavy processes can exceed VPS capacity. This source change does not redeploy an existing VPS automatically.
 
 ## Verification and recovery
 

@@ -81,13 +81,16 @@ class VnstockProvider:
     def universe(self) -> dict:
         result = normalize_universe(self.call(lambda: self.reference.equity.list_by_exchange(source="vci")))
         result["provenance"] = "LIVE_UNVERIFIED"
-        return result
+        from service.screening_validation import certify_universe
+        return certify_universe(result)
 
     def history(self, symbol: str, start: date, target_session: date, *, kind: str = "EQUITY",
                 input_mode: str = "COMPLETED_DAILY", minimum_bars: int = 120) -> DailyHistory:
         if kind not in {"EQUITY", "INDEX"}:
             raise DataError("INVALID_ASSET_KIND")
-        source = "vci" if kind == "EQUITY" else "kbs"
+        # Pin VCI for both: the deployed SDK exposes the index route, and the
+        # live KBS index source currently returns VNSTOCK_SOURCE_UNAVAILABLE.
+        source = "vci"
         asset = self.market.equity(symbol) if kind == "EQUITY" else self.market.index(symbol)
         frame = self.call(lambda: asset.ohlcv(start=start.isoformat(), end=target_session.isoformat(),
             interval="1D", source=source, floating=None))
@@ -95,4 +98,5 @@ class VnstockProvider:
             observed_at=datetime.now(timezone.utc), input_mode=input_mode, minimum_bars=minimum_bars,
             provenance="LIVE_UNVERIFIED")
         history.payload["metadata"]["requested_start"] = start.isoformat()
-        return history
+        from service.screening_validation import certify_history
+        return certify_history(history)
