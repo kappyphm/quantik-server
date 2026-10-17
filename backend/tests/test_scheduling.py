@@ -199,6 +199,26 @@ def test_ingestion_resume_preserves_provider_budget(tmp_path, monkeypatch):
     third = ingestion.ingest_market(settings, start, target, resume=True)
     assert third["manifest_id"] and third["histories_available"] == 5
     assert calls == ["VNINDEX", "AAA", "BBB", "BBB", "CCC", "DDD", "CCC"]
+    # A newer timestamp must not make an obsolete SDK contract or an incomplete
+    # requested window eligible for the next manifest.
+    from copy import deepcopy
+    from service.market_data import save_history
+    from service.models import HistoryRevision
+    with sessions() as db, db.begin():
+        original = db.scalar(select(HistoryRevision).where(HistoryRevision.symbol == "AAA"))
+        for invalid in ("old_contract", "short_window", "empty_history"):
+            payload = deepcopy(original.payload)
+            payload.pop("symbol")
+            meta = payload["metadata"]
+            meta["observed_at"] = "2026-10-16T09:01:00+00:00"
+            if invalid == "old_contract":
+                meta["provider_version"] = "5.0.1"
+                meta["screening_validation"]["policy"] = "vnstock-5.0.1-screening-contract-1"
+            elif invalid == "short_window":
+                meta["requested_start"] = "2026-10-01"
+            else:
+                payload["bars"] = []
+            save_history(db, DailyHistory("AAA", target, "COMPLETED_DAILY", payload))
     fourth = ingestion.ingest_market(settings, start, target, resume=True)
     assert fourth["manifest_id"] == third["manifest_id"] and len(calls) == 7
     assert len(universe_calls) == 1  # Resume must not re-fetch a verified daily reference.

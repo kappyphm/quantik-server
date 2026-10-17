@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from service.db import make_engine, session_factory
 from service.market_data import DataError, checksum, publish_manifest, save_history, save_universe
@@ -80,10 +80,11 @@ def ingest_market(settings: Settings, start: date, target_session: date,
         for symbol in symbols:
             if resume:
                 with sessions() as db:
-                    row = db.scalar(select(HistoryRevision).where(HistoryRevision.symbol == symbol,
+                    rows = db.scalars(select(HistoryRevision).where(HistoryRevision.symbol == symbol,
                         HistoryRevision.target_session == target_session, HistoryRevision.input_mode == input_mode)
-                        .order_by(HistoryRevision.payload["metadata"]["observed_at"].as_string().desc()).limit(1))
-                    if row and reusable_history(row, start, minimum_bars):
+                        .order_by(HistoryRevision.payload["metadata"]["observed_at"].as_string().desc())
+                        .execution_options(yield_per=1))
+                    if any(reusable_history(row, start, minimum_bars) for row in rows):
                         continue
             try:
                 guard()
@@ -112,9 +113,21 @@ def ingest_market(settings: Settings, start: date, target_session: date,
             histories = {}
             # Manifest publication needs only IDs/metadata, not every historical bar in RAM.
             headers = db.execute(select(HistoryRevision.id, HistoryRevision.symbol, HistoryRevision.target_session,
-                HistoryRevision.input_mode, HistoryRevision.payload["metadata"].label("metadata"))
+                HistoryRevision.input_mode, HistoryRevision.payload["metadata"].label("metadata"),
+                func.json_array_length(HistoryRevision.payload["bars"]).label("bar_count"))
                 .where(HistoryRevision.target_session == target_session, HistoryRevision.input_mode == input_mode))
             for header in headers.mappings():
+                metadata = header["metadata"]
+                if (header["bar_count"] < minimum_bars or not metadata.get("requested_start")
+                        or metadata["requested_start"] > start.isoformat()):
+                    continue
+                if metadata.get("provenance") == "LIVE_UNVERIFIED":
+                    from service.screening_validation import POLICY
+                    evidence = metadata.get("screening_validation", {})
+                    if evidence.get("policy") != POLICY or evidence.get("scope") != "SCREENING_ONLY":
+                        continue
+                elif metadata.get("provenance") != "LIVE_VALIDATED":
+                    continue
                 row = SimpleNamespace(id=header["id"], symbol=header["symbol"], target_session=header["target_session"],
                     input_mode=header["input_mode"], payload={"metadata": header["metadata"]})
                 if row.symbol not in members and row.symbol != "VNINDEX":
