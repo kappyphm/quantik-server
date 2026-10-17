@@ -10,6 +10,25 @@ from service.market_data import DataError, normalize_history, normalize_universe
 from service.vnstock_provider import reserve_provider_call
 
 
+def test_invalid_candle_requires_valid_corroborating_record():
+    from service.provider_repair import replace_invalid_ohlc
+    frame = pd.DataFrame({"time": pd.date_range("2025-01-01", periods=130),
+        "open": 100., "high": 102., "low": 99., "close": 101., "volume": 1000.})
+    frame.attrs["source"] = "vci"
+    second = frame.copy(); second.attrs["source"] = "kbs"
+    frame.loc[5, "open"] = 103.
+    repaired, evidence = replace_invalid_ohlc(frame, second, "kbs")
+    assert frame.loc[5, "open"] == 103. and repaired.loc[5, "open"] == 100.
+    assert evidence[0]["session"] == "2025-01-06" and evidence[0]["source"] == "kbs"
+    assert evidence[0]["original_checksum"] != evidence[0]["replacement_checksum"]
+    second.loc[5, "open"] = 104.
+    with pytest.raises(DataError, match="REPAIR_CANDLE_UNAVAILABLE"):
+        replace_invalid_ohlc(frame, second, "kbs")
+    second.loc[:, "close"] = 1000.
+    with pytest.raises(DataError, match="REPAIR_CORROBORATION_FAILED"):
+        replace_invalid_ohlc(frame, second, "kbs")
+
+
 def test_history_units_readiness_revisions_and_shared_budget(tmp_path, monkeypatch):
     url = "sqlite:///" + (tmp_path / "market.sqlite").as_posix()
     monkeypatch.setenv("QUANTIK_DATABASE_URL", url)

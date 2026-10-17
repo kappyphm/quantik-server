@@ -94,9 +94,24 @@ class VnstockProvider:
         asset = self.market.equity(symbol) if kind == "EQUITY" else self.market.index(symbol)
         frame = self.call(lambda: asset.ohlcv(start=start.isoformat(), end=target_session.isoformat(),
             interval="1D", limit=20000, source=source, floating=None))
-        history = normalize_history(frame, symbol=symbol, kind=kind, source=source, target_session=target_session,
+        args = dict(symbol=symbol, kind=kind, source=source, target_session=target_session,
             observed_at=datetime.now(timezone.utc), input_mode=input_mode, minimum_bars=minimum_bars,
             provenance="LIVE_UNVERIFIED")
+        repairs = []
+        try:
+            history = normalize_history(frame, **args)
+        except DataError as exc:
+            if exc.code != "INVALID_OHLC" or input_mode != "COMPLETED_DAILY":
+                raise
+            secondary_source = "kbs" if kind == "INDEX" else "vnd"
+            secondary = self.call(lambda: asset.ohlcv(start=start.isoformat(), end=target_session.isoformat(),
+                interval="1D", limit=20000, source=secondary_source, floating=None))
+            from service.provider_repair import replace_invalid_ohlc
+            repaired, repairs = replace_invalid_ohlc(frame, secondary, secondary_source)
+            history = normalize_history(repaired, **args)
+        if repairs:
+            history.payload["metadata"]["source_corrections"] = repairs
+            history.payload["metadata"]["warnings"].append("CANDLES_REPLACED_FROM_CORROBORATED_SOURCE")
         history.payload["metadata"]["requested_start"] = start.isoformat()
         from service.screening_validation import certify_history
         return certify_history(history)
