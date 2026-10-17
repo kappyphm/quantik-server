@@ -15,6 +15,14 @@ docker push kappyphm/quantik:frontend-RELEASE
 
 Replace RELEASE with a new unique release identifier. Confirm the Docker Hub repository remains private before pushing. Both applications share one private repository with distinct tags. Frontend dependencies are locked by package-lock.json. requirements.resolved.txt inventories the Python packages used for the trial build; it is an inventory, not a hash-verified dependency lock. Deployed images are pinned by digest.
 
+For application-only backend updates, `deploy/production/Dockerfile.app-update`
+can reuse an explicitly pinned deployed image via `--build-arg BACKEND_BASE_IMAGE=...`.
+It checks every current runtime dependency against the installed distribution,
+then replaces the service package and migrations. This preserves the exact
+existing numerical runtime and avoids dependency downloads during a code release.
+Use the root Dockerfile for dependency or entry-point changes. Record the base
+image digest, resulting image digest and source commit with deployment evidence.
+
 The backend image installs vnstock 5.0.1 from the provider's package index. Do not bake provider credentials into build arguments, environment layers, or images. The build does not run Vnstock onboarding or authenticate a provider device. Runtime images exclude pip/npm and run as non-root users.
 
 ## VPS files and initial setup
