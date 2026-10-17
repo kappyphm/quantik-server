@@ -165,12 +165,28 @@ def test_screening_publication_deadline_all_results_and_api(tmp_path, monkeypatc
             billing.grant(db, payment, order, now)
         latest = client.get("/api/v1/screenings/latest", headers=headers)
         assert latest.status_code == 200 and latest.json()["id"] == morning.id
-        assert latest.json()["stale"] and latest.json()["latest_attempt"]["status"] == "FAILED"
+        assert latest.json()["stale"]
+        assert not {"latest_attempt", "manifest_id", "summary", "schedule", "reason"} & latest.json().keys()
         page = client.get(f"/api/v1/screenings/{morning.id}/results?limit=2", headers=headers).json()
         assert [r["symbol"] for r in page["items"]] == ["AAA", "BBB"]
-        rest = client.get(f"/api/v1/screenings/{morning.id}/results", params={"cursor": page["next_cursor"]}, headers=headers).json()
-        assert [r["symbol"] for r in rest["items"]] == ["LOW", "NEW"]
+        assert page["next_cursor"] is None
+        assert set(page["items"][0]) == {"symbol", "exchange", "score", "price_vnd", "change_ratio", "recommendation"}
+        assert client.get(f"/api/v1/screenings/{morning.id}/results?group=ALL", headers=headers).status_code == 422
+        assert client.get(f"/api/v1/screenings/{morning.id}/results?group=STRONG", headers=headers).status_code == 422
+        assert client.get(f"/api/v1/screenings/{morning.id}/results?limit=6", headers=headers).status_code == 422
         assert len(client.get(f"/api/v1/screenings/{morning.id}/results?group=OVERALL", headers=headers).json()["items"]) == 2
+        with sessions() as db, db.begin():
+            from copy import deepcopy
+            seed = db.get(ScreeningResult, (morning.id, "AAA"))
+            for rank in range(3, 9):
+                payload = deepcopy(seed.payload)
+                payload["symbol"] = f"CAP{rank}"
+                db.add(ScreeningResult(run_id=morning.id, symbol=payload["symbol"],
+                    overall_rank=rank, strong_rank=None, accumulation_rank=None,
+                    distribution_rank=rank, payload=payload))
+        capped = client.get(f"/api/v1/screenings/{morning.id}/results?cursor=5", headers=headers).json()
+        assert len(capped["items"]) == 5 and capped["next_cursor"] is None
+        assert not {"CAP6", "CAP7", "CAP8"} & {r["symbol"] for r in capped["items"]}
         assert client.get("/api/v1/instruments?limit=2", headers=headers).json()["next_cursor"] == "BBB"
         assert client.get("/api/v1/screenings/latest").status_code == 401
         # The automatic screening contract accepts normalized live inputs without
@@ -182,7 +198,7 @@ def test_screening_publication_deadline_all_results_and_api(tmp_path, monkeypatc
         assert live.summary["source_mode"] == "LIVE_SCREENING_VALIDATED"
         settings.allow_fixture_analysis = False
         assert client.get("/api/v1/screenings/latest", headers=headers).json()["id"] == live.id
-        live_results = client.get(f"/api/v1/screenings/{live.id}/results?group=STRONG", headers=headers)
+        live_results = client.get(f"/api/v1/screenings/{live.id}/results?group=OVERALL", headers=headers)
         assert live_results.status_code == 200 and live_results.json()["items"]
         with sessions() as db, db.begin():
             bucket = db.scalar(select(QuotaBucket).where(QuotaBucket.account_id == account.id))

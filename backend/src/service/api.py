@@ -312,8 +312,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 .order_by(QuotaBucket.valid_from.desc()).limit(50))]}
 
     def screening_header(run):
-        return {"id": run.id, "target_session": run.target_session.isoformat(), "slot": run.slot,
-            "status": run.status, "reason": run.reason, "manifest_id": run.manifest_id,
+        return {"id": run.id, "target_session": run.target_session.isoformat(),
             "published_at": run.published_at}
 
     def require_screening_source(run):
@@ -331,7 +330,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         pointer = db.get(PublishedScreening, slot)
         if not pointer:
             return JSONResponse(status_code=503, content={"code": "SCREENING_NOT_READY",
-                "latest_attempt": screening_header(attempt) if attempt else None,
                 "retry_after_seconds": 60}, headers={"Retry-After": "60"})
         run = db.get(ScreeningRun, pointer.run_id)
         require_screening_source(run)
@@ -356,14 +354,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 reasons.append("CALENDAR_OUT_OF_RANGE")
         if calendar_status != "READY" and int(time.time()) - run.published_at > 36*3600:
             reasons.append("PUBLICATION_AGE")
-        return {**screening_header(run), "summary": run.summary, "stale": bool(reasons), "stale_reasons": reasons,
-            "server_now": int(time.time()), "refresh_after_seconds": 60,
-            "schedule": {"timezone": "Asia/Ho_Chi_Minh", "AM": "11:30–12:55", "PM": "16:00–17:30"},
-            "latest_attempt": screening_header(attempt) if attempt else None, "calendar_status": calendar_status}
+        return {**screening_header(run), "stale": bool(reasons), "refresh_after_seconds": 60}
 
     @app.get("/api/v1/screenings/{run_id}/results", response_model=ScreeningPage)
-    def screening_results(run_id: str, group: Literal["ALL", "OVERALL", "STRONG", "ACCUMULATION", "DISTRIBUTION"] = "ALL",
-                          cursor: str | None = None, limit: int = Query(default=50, ge=1, le=200),
+    def screening_results(run_id: str, group: Literal["OVERALL", "DISTRIBUTION"] = "OVERALL",
+                          limit: int = Query(default=5, ge=1, le=5),
                           account=Depends(user), db=Depends(db_session)):
         from service.screening_access import require_access
         require_access(db, account.id)
@@ -373,27 +368,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if run.status != "READY":
             raise jobs.JobError("SCREENING_RUN_NOT_READY", 409)
         require_screening_source(run)
-        columns = {"OVERALL": ScreeningResult.overall_rank, "STRONG": ScreeningResult.strong_rank,
-            "ACCUMULATION": ScreeningResult.accumulation_rank, "DISTRIBUTION": ScreeningResult.distribution_rank}
+        columns = {"OVERALL": ScreeningResult.overall_rank, "DISTRIBUTION": ScreeningResult.distribution_rank}
         query = select(ScreeningResult).where(ScreeningResult.run_id == run_id)
-        if group == "ALL":
-            if cursor:
-                query = query.where(ScreeningResult.symbol > cursor)
-            query = query.order_by(ScreeningResult.symbol)
-        else:
-            rank = columns[group]
-            query = query.where(rank.is_not(None)).order_by(rank)
-            if cursor:
-                if not cursor.isdigit():
-                    raise jobs.JobError("INVALID_CURSOR", 422)
-                query = query.where(rank > int(cursor))
-        rows = list(db.scalars(query.limit(limit+1)))
-        items = [{**row.payload, "ranks": {"OVERALL": row.overall_rank, "STRONG": row.strong_rank,
-            "ACCUMULATION": row.accumulation_rank, "DISTRIBUTION": row.distribution_rank}} for row in rows[:limit]]
-        next_cursor = None
-        if len(rows) > limit:
-            next_cursor = rows[limit-1].symbol if group == "ALL" else str(getattr(rows[limit-1], group.lower()+"_rank"))
-        return {"run_id": run_id, "group": group, "items": items, "next_cursor": next_cursor}
+        rank = columns[group]
+        rows = db.scalars(query.where(rank.is_not(None), rank <= 5).order_by(rank).limit(limit))
+        items = []
+        for row in rows:
+            payload = row.payload
+            prices = payload.get("price_summary", {})
+            items.append({"symbol": row.symbol, "exchange": payload.get("exchange"),
+                "score": payload["groups"]["DISTRIBUTION"]["score"] if group == "DISTRIBUTION" else payload["overall_score"],
+                "price_vnd": prices.get("close"), "change_ratio": prices.get("pct_change_1d"),
+                "recommendation": payload.get("assessment", {}).get("recommendation")})
+        return {"run_id": run_id, "group": group, "items": items, "next_cursor": None}
 
     @app.get("/api/v1/instruments")
     def instruments(cursor: str | None = None, exchange: Literal["HOSE", "HNX", "UPCOM"] | None = None,
