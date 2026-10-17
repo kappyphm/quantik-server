@@ -46,8 +46,10 @@ def router(settings: Settings, user: Callable, admin: Callable, db_session: Call
 
     @routes.get("/plans")
     def plans(db=Depends(db_session), current=Depends(effective_settings)):
+        from service.onboarding import FREE_PLAN_ID
+        from sqlalchemy import or_
         return {"payments_enabled": current.payments_enabled, "items": [billing.plan_view(p) for p in
-            db.scalars(select(PlanVersion).where(PlanVersion.available.is_(True)).order_by(PlanVersion.price_vnd, PlanVersion.id))]}
+            db.scalars(select(PlanVersion).where(or_(PlanVersion.available.is_(True), PlanVersion.id == FREE_PLAN_ID)).order_by(PlanVersion.price_vnd, PlanVersion.id))]}
 
     @routes.post("/admin/plans", status_code=201)
     def create_plan(body: billing.PlanInput,

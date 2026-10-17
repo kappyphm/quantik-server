@@ -224,6 +224,10 @@ def test_prepaid_payment_contract_and_atomic_entitlement(tmp_path, monkeypatch):
         replacement_id = replacement.json()["id"]
         assert client.post(f"/api/v1/admin/plans/{replacement_id}/availability", json={"available": True}, headers=admin_auth).status_code == 409
         assert client.post(f"/api/v1/admin/plans/{replacement_id}/availability", json={"available": True, "replace_existing": True}, headers=admin_auth).status_code == 200
-        assert [p["id"] for p in client.get("/api/v1/plans").json()["items"]] == [replacement_id]
+        from service.onboarding import FREE_PLAN_ID
+        public = client.get("/api/v1/plans").json()["items"]
+        assert [p["id"] for p in public] == [FREE_PLAN_ID, replacement_id]
+        assert public[0]["price_vnd"] == 0 and public[0]["daily_request_limit"] == 3
+        assert client.post(f"/api/v1/admin/plans/{FREE_PLAN_ID}/availability", json={"available": True}, headers=admin_auth).json()["code"] == "SIGNUP_PLAN_MANAGED"
 
     engine.dispose()
