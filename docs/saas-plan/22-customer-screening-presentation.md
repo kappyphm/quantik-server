@@ -22,6 +22,14 @@ The date stays visible in confirmation, history and the report.
 Chart workspaces embed TradingView directly, keeping timeframe and indicator
 controls and removing sample-price charts and the source chooser.
 
+Production inspection found that the embedded widget rejects HOSE:FPT with
+"This symbol is only available on TradingView". An iframe and working controls
+do not prove that price candles are available. TradingView's official data FAQ
+confirms that this restriction covers every timeframe and personal paid plans
+do not unlock widget data: https://www.tradingview.com/widget-docs/faq/data/.
+An external chart link preserves the selected symbol/timeframe. Fully embedded
+Vietnamese candle charts remain unverified and incomplete under that restriction.
+
 This presentation change does not relax data quality: the user confirmed that
 the 95% screening readiness threshold must stay while additional sources are
 qualified. It does not certify Quant adjustment or bypass model validation.
