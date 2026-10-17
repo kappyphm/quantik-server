@@ -10,7 +10,7 @@ import re
 
 from service.market_data import DailyHistory, DataError, checksum
 
-POLICY = "vnstock-5.0.1-screening-contract-1"
+POLICY = "vnstock-5.0.3-screening-contract-1"
 
 
 def content_hash(payload: dict) -> str:
@@ -29,7 +29,7 @@ def certify_universe(payload: dict) -> dict:
             raise DataError("SCREENING_UNIVERSE_CONTRACT")
     result = deepcopy(payload)
     result["screening_validation"] = {"policy": POLICY, "content_checksum": content_hash(result),
-        "provider": "vnstock", "version": "5.0.1", "source": "vci", "scope": "SCREENING_ONLY"}
+        "provider": "vnstock", "version": "5.0.3", "source": "vci", "scope": "SCREENING_ONLY"}
     return result
 
 
@@ -37,7 +37,7 @@ def certify_history(history: DailyHistory) -> DailyHistory:
     payload = deepcopy(history.payload)
     meta, bars = payload["metadata"], payload["bars"]
     equity = meta.get("kind") == "EQUITY"
-    expected = {"provider": "vnstock", "provider_version": "5.0.1", "provenance": "LIVE_UNVERIFIED",
+    expected = {"provider": "vnstock", "provider_version": "5.0.3", "provenance": "LIVE_UNVERIFIED",
         "price_unit": "VND" if equity else "POINTS",
         "source_price_unit": "THOUSAND_VND" if equity else "POINTS", "volume_unit": "SHARES",
         "target_session": history.target_session.isoformat(), "input_mode": history.input_mode}

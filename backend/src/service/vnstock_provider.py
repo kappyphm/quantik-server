@@ -38,7 +38,7 @@ def reserve_provider_call(db, limits: dict[str, int], now: int | None = None) ->
 
 class VnstockProvider:
     def __init__(self, api_key: str, sessions):
-        if version("vnstock") != "5.0.1":
+        if version("vnstock") != "5.0.3":
             raise DataError("PROVIDER_VERSION_MISMATCH")
         self.sessions = sessions
         import vnstock

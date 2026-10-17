@@ -23,7 +23,7 @@ existing numerical runtime and avoids dependency downloads during a code release
 Use the root Dockerfile for dependency or entry-point changes. Record the base
 image digest, resulting image digest and source commit with deployment evidence.
 
-The backend image installs vnstock 5.0.1 from the provider's package index. Do not bake provider credentials into build arguments, environment layers, or images. The build does not run Vnstock onboarding or authenticate a provider device. Runtime images exclude pip/npm and run as non-root users.
+The backend image installs vnstock 5.0.3 from the provider's package index. Do not bake provider credentials into build arguments, environment layers, or images. The build does not run Vnstock onboarding or authenticate a provider device. Runtime images exclude pip/npm and run as non-root users.
 
 ## VPS files and initial setup
 

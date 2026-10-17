@@ -118,7 +118,7 @@ def normalize_history(frame: pd.DataFrame, *, symbol: str, kind: Literal["EQUITY
         df[["open", "high", "low", "close"]] *= 1000.0
     bars = [{"session": session.date().isoformat(), **{key: float(value) for key, value in row.items()}}
         for session, row in df.iterrows()]
-    metadata = {"provider": "vnstock", "provider_version": "5.0.1", "source": source,
+    metadata = {"provider": "vnstock", "provider_version": "5.0.3", "source": source,
         "provenance": provenance,
         "kind": kind, "price_unit": "VND" if kind == "EQUITY" else "POINTS", "volume_unit": "SHARES",
         "source_price_unit": "THOUSAND_VND" if kind == "EQUITY" else "POINTS",

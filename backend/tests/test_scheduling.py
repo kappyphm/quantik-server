@@ -183,7 +183,7 @@ def test_ingestion_resume_preserves_provider_budget(tmp_path, monkeypatch):
             from service.screening_validation import certify_history
             equity = kwargs["kind"] == "EQUITY"
             return certify_history(DailyHistory(symbol, target_session, kwargs["input_mode"], {"metadata": {"kind": kwargs["kind"],
-                "provider": "vnstock", "provider_version": "5.0.1", "source": "vci" if equity else "kbs",
+                "provider": "vnstock", "provider_version": "5.0.3", "source": "vci" if equity else "kbs",
                 "price_unit": "VND" if equity else "POINTS", "source_price_unit": "THOUSAND_VND" if equity else "POINTS", "volume_unit": "SHARES",
                 "target_session": target_session.isoformat(), "input_mode": kwargs["input_mode"],
                 "requested_start": start.isoformat(), "provenance": "LIVE_UNVERIFIED", "observed_at": "2026-10-15T09:01:00+00:00"},
