@@ -1,7 +1,7 @@
 # Customer screening presentation
 
-Customer feedback on 2026-10-18 changes the presentation contract to a launch
-banner followed by at most five leading stocks and five distribution warnings.
+Customer clarification on 2026-10-18 keeps the presentation banner followed
+by at most five leading stocks and five distribution warnings.
 Customers no longer choose a screening slot or browse every internal group.
 
 The authenticated customer API returns only symbol, exchange, group score,
@@ -12,9 +12,11 @@ OVERALL and DISTRIBUTION, ranks 1–5. A cursor cannot reveal further ranks.
 Publication date and a generic stale indicator remain visible so older results
 are not presented as current. Admin operational diagnostics remain available.
 
-The launch button reads the latest scheduled publication; it does not enqueue
-a global scan or consume a customer's Quant admission. Read-only refreshes
-continue while the page is visible. No-ready-data stays a generic waiting state.
+The page automatically reads the latest publication when opened. Customers have
+no launch or rescan button. Read-only refreshes continue while the page is visible
+and do not consume a customer's Quant admission. Only authenticated admins can
+request a backfill through the existing admin route. No-ready-data stays a
+generic waiting state.
 
 Quant automatically selects the backend's latest completed session, while
 unresolved submissions retain their pinned session/idempotency key for replay.
