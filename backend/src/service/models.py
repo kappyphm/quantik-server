@@ -50,6 +50,7 @@ class LoginThrottle(Base):
     __tablename__ = "login_throttles"
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     failures: Mapped[int] = mapped_column(Integer, default=0)
+    last_failure_at: Mapped[int] = mapped_column(Integer, default=0)
     blocked_until: Mapped[int] = mapped_column(Integer, default=0)
 
 

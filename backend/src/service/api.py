@@ -100,7 +100,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.exception_handler(AuthError)
     async def auth_error(request: Request, exc: AuthError):
         return JSONResponse(status_code=exc.status, content={"code": exc.code,
-            "message": "Authentication failed", "request_id": request.state.request_id})
+            "message": "Authentication failed", "request_id": request.state.request_id},
+            headers={"Retry-After": str(exc.retry_after)} if exc.retry_after else None)
 
     @app.exception_handler(jobs.JobError)
     async def job_error(request: Request, exc: jobs.JobError):
@@ -152,9 +153,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/v1/admin/auth/login")
     def login(body: AdminLogin, request: Request, response: Response, db=Depends(db_session)):
-        # Trust only direct peer address until a reverse proxy allowlist is configured.
+        from service.proxy_address import client_address
         result = request.app.state.identity.admin_login(db, body.username, body.password,
-            request.client.host if request.client else "unknown")
+            client_address(request, settings))
         return tokens(response, result, "admin")
 
     @app.post("/api/v1/admin/auth/refresh")
