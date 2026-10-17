@@ -49,7 +49,7 @@ class Report(BaseModel):
             raise ValueError("Report must contain all version-1 sections")
         if any(self.sections[name].status != "AVAILABLE" for name in REQUIRED_AVAILABLE):
             raise ValueError("Required sections are unavailable")
-        for stamp in (self.evaluated_at, self.data_as_of):
+        for stamp in (self.evaluated_at, self.data_as_of, *([self.data_observed_at] if self.data_observed_at else [])):
             if stamp.tzinfo is None or stamp.utcoffset().total_seconds() != 0:
                 raise ValueError("Report timestamps must be UTC")
         if not self.decision or not self.commentary:

@@ -79,7 +79,8 @@ def resolve_inputs(db, job: Job, settings: Settings) -> dict:
         raise DataError("HISTORY_MISMATCH")
     if checksum(history.payload) != history.checksum:
         raise DataError("HISTORY_CHECKSUM_MISMATCH")
-    if not settings.allow_fixture_analysis and history.payload["metadata"].get("provenance") != "LIVE_VALIDATED":
+    if not settings.allow_fixture_analysis and (history.payload["metadata"].get("provenance") != "LIVE_VALIDATED"
+            or history.payload["metadata"].get("adjustment") != "VERIFIED"):
         raise DataError("LIVE_DATA_NOT_VALIDATED", True)
     warnings = list(row.warnings or []) + history.payload["metadata"].get("warnings", [])
     evaluated_at = job.evaluated_at or int(time.time())
@@ -192,7 +193,7 @@ class AnalysisWorker:
                 report = assemble_report(final, job_id=job.id, evaluated_at=datetime.fromtimestamp(inputs["evaluated_at"], timezone.utc),
                     data_as_of=datetime.combine(job.target_session, datetime.min.time(), timezone.utc),
                     target_session=job.target_session,
-                    data_observed_at=datetime.fromisoformat(inputs["history"].payload["metadata"]["observed_at"]),
+                    data_observed_at=datetime.fromisoformat(inputs["history"].payload["metadata"]["observed_at"]).astimezone(timezone.utc),
                     versions=inputs["versions"], config=inputs["config"], warnings=inputs["warnings"])
                 if heartbeat.lost.is_set():
                     raise jobs.JobError("STALE_EXECUTION")
