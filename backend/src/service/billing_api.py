@@ -69,6 +69,8 @@ def router(settings: Settings, user: Callable, admin: Callable, db_session: Call
         plan = db.scalar(select(PlanVersion).where(PlanVersion.id == plan_id).with_for_update())
         if not plan:
             raise JobError("NOT_FOUND", 404)
+        if plan.price_vnd == 0:
+            raise JobError("SIGNUP_PLAN_MANAGED", 409)
         # Plan content is immutable. Price/quota changes always create a new version.
         before = plan.available
         if body.available and plan.replaces_plan_id and not before:

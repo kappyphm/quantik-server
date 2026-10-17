@@ -145,7 +145,7 @@ def order_detail(db: Session, order: PurchaseOrder, now: int | None = None) -> d
             ("id", "amount_vnd", "status", "reason", "received_at", "transaction_at")} for p in payments])
     if unresolved:
         result["qr_url"] = None
-    latest_end = db.scalar(select(func.max(Subscription.valid_until)).where(Subscription.account_id == order.account_id))
+    latest_end = db.scalar(select(func.max(Subscription.valid_until)).where(Subscription.account_id == order.account_id, Subscription.grant_key.is_(None)))
     start = subscription.valid_from if subscription else max(result["server_now"], latest_end or 0)
     result["expected_valid_from"] = start
     result["expected_valid_until"] = subscription.valid_until if subscription else start + result["plan"]["duration_days"] * 86400
@@ -169,7 +169,7 @@ def create_order(db: Session, account_id: str, plan_id: str, key: str, settings:
         return previous
     require_configuration(settings)
     plan = db.scalar(select(PlanVersion).where(PlanVersion.id == plan_id).with_for_update())
-    if not plan or not plan.available:
+    if not plan or not plan.available or plan.price_vnd <= 0:
         raise JobError("PLAN_UNAVAILABLE", 409)
     if not new_order:
         pending = db.scalar(select(PurchaseOrder).where(PurchaseOrder.account_id == account_id,
@@ -219,7 +219,10 @@ def grant(db: Session, payment: BankPayment, order: PurchaseOrder, now: int, act
         return
     plan = db.get(PlanVersion, order.plan_id)
     # Immutable version: future plan withdrawal cannot change an already purchased contract.
-    last_end = db.scalar(select(func.max(Subscription.valid_until)).where(Subscription.account_id == account.id))
+    last_end = db.scalar(select(func.max(Subscription.valid_until)).where(Subscription.account_id == account.id, Subscription.grant_key.is_(None)))
+    for free in db.scalars(select(Subscription).where(Subscription.account_id == account.id,
+            Subscription.grant_key.is_not(None), Subscription.valid_until > now)):
+        free.valid_until = now
     start = max(now, last_end or now)
     from service.daily_limits import day_bounds, created_today
     end = start + plan.duration_days * 86400

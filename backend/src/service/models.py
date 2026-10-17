@@ -20,6 +20,9 @@ class Account(Base):
     google_sub: Mapped[str | None] = mapped_column(String(255), unique=True)
     display_name: Mapped[str | None] = mapped_column(String(255))
     email: Mapped[str | None] = mapped_column(String(320))
+    date_of_birth: Mapped[date | None] = mapped_column(Date)
+    phone_number: Mapped[str | None] = mapped_column(String(16))
+    profile_required: Mapped[bool] = mapped_column(Boolean, default=False)
     password_hash: Mapped[str | None] = mapped_column(String(512))
     role: Mapped[str] = mapped_column(String(16))
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -328,7 +331,7 @@ class PublishedScreening(Base):
 
 class PlanVersion(Base):
     __tablename__ = "plan_versions"
-    __table_args__ = (CheckConstraint("price_vnd > 0 AND duration_days > 0 AND analysis_quota > 0 AND active_limit > 0"),
+    __table_args__ = (CheckConstraint("price_vnd >= 0 AND duration_days > 0 AND analysis_quota > 0 AND active_limit > 0", name="ck_plan_terms"),
         UniqueConstraint("created_by", "creation_key"))
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     name: Mapped[str] = mapped_column(String(100))
@@ -395,10 +398,12 @@ class BankPayment(Base):
 
 class Subscription(Base):
     __tablename__ = "subscriptions"
+    __table_args__ = (CheckConstraint("(order_id IS NOT NULL AND payment_id IS NOT NULL AND grant_key IS NULL) OR (order_id IS NULL AND payment_id IS NULL AND grant_key IS NOT NULL)", name="ck_subscription_origin"),)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
-    order_id: Mapped[str] = mapped_column(ForeignKey("purchase_orders.id"), unique=True)
-    payment_id: Mapped[str] = mapped_column(ForeignKey("bank_payments.id"), unique=True)
+    order_id: Mapped[str | None] = mapped_column(ForeignKey("purchase_orders.id"), unique=True)
+    payment_id: Mapped[str | None] = mapped_column(ForeignKey("bank_payments.id"), unique=True)
+    grant_key: Mapped[str | None] = mapped_column(String(64), unique=True)
     bucket_id: Mapped[str] = mapped_column(ForeignKey("quota_buckets.id"), unique=True)
     plan_id: Mapped[str] = mapped_column(ForeignKey("plan_versions.id"))
     valid_from: Mapped[int] = mapped_column(Integer)

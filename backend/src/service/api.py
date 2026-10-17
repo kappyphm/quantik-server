@@ -22,6 +22,7 @@ from service.screening_contracts import ScreeningPage
 from service.settings import Settings
 from service.telemetry import HttpMetrics, ProcessMonitor, emit
 from service.operations_health import Collector
+from service.onboarding import ProfileInput, profile_view
 
 
 class AdminLogin(BaseModel):
@@ -222,8 +223,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/v1/me")
     def profile(account=Depends(user)):
-        return {"id": account.id, "role": account.role,
-            "display_name": account.display_name, "email": account.email}
+        return profile_view(account)
+
+    @app.patch("/api/v1/me/profile")
+    def update_profile(body: ProfileInput, account=Depends(user), db=Depends(db_session)):
+        from service.models import Account
+        from service.identity import audit
+        account = db.scalar(select(Account).where(Account.id == account.id).with_for_update())
+        for key, value in body.model_dump().items():
+            setattr(account, key, value)
+        account.profile_required = False
+        audit(db, "user.profile_updated", account.id)
+        db.commit()
+        return profile_view(account)
 
     def job_response(db, job):
         reservation = db.scalar(select(Reservation).where(Reservation.job_id == job.id))
@@ -246,6 +258,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         db.scalar(select(Account).where(Account.id == account.id).with_for_update())
         existing = db.scalar(select(Job).where(Job.account_id == account.id, Job.idempotency_key == idempotency_key))
         if not existing:
+            if account.profile_required:
+                raise jobs.JobError("PROFILE_REQUIRED", 403)
             if not current_bucket(db, account.id, int(time.time())):
                 raise jobs.JobError("NO_ENTITLEMENT", 403)
             try:

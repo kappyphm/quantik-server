@@ -34,7 +34,8 @@ def router(admin: Callable, db_session: Callable) -> APIRouter:
         if cursor:
             query = query.where(Account.id > cursor)
         rows = list(db.scalars(query.limit(limit+1)))
-        return {"items": [{"id": a.id, "enabled": a.enabled, "display_name": a.display_name, "email": a.email} for a in rows[:limit]],
+        from service.onboarding import profile_view
+        return {"items": [profile_view(a) | {"enabled": a.enabled} for a in rows[:limit]],
             "next_cursor": rows[limit-1].id if len(rows)>limit else None}
 
     @routes.post("/users/{account_id}/state")

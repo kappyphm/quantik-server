@@ -1,7 +1,7 @@
 from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
-SCHEMA_REVISION = "0015"
+SCHEMA_REVISION = "0016"
 
 
 class Base(DeclarativeBase):

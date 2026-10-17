@@ -92,13 +92,17 @@ def callback(db: Session, provider: GoogleProvider, state: str, browser: str, co
     else:
         from sqlalchemy.dialects.sqlite import insert
     from service.models import new_id
-    db.execute(insert(Account).values(id=new_id(), google_sub=sub, role="user", enabled=True)
-        .on_conflict_do_nothing(index_elements=["google_sub"]))
-    account = db.scalar(select(Account).where(Account.google_sub == sub))
+    created_id = db.scalar(insert(Account).values(id=new_id(), google_sub=sub, role="user", enabled=True, profile_required=True)
+        .on_conflict_do_nothing(index_elements=["google_sub"]).returning(Account.id))
+    account = db.scalar(select(Account).where(Account.google_sub == sub).with_for_update())
     if not account or not account.enabled or account.role != "user":
         raise AuthError()
-    account.display_name = profile["display_name"]
+    if not account.date_of_birth:
+        account.display_name = profile["display_name"]
     account.email = profile["email"]
+    if created_id:
+        from service.onboarding import grant_signup
+        grant_signup(db, account)
     exchange = secrets.token_urlsafe(48)
     flow.account_id, flow.exchange_hash = account.id, digest(exchange)
     flow.expires_at, flow.stage = int(time.time()) + 60, "VERIFIED"

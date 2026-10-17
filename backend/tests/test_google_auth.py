@@ -86,8 +86,21 @@ def test_google_exchange_browser_binding_and_role_isolation(tmp_path, monkeypatc
         assert client.get("/api/v1/admin/me", headers=headers).status_code == 401
         assert client.get("/health/ready").status_code == 200
         owner_id = client.get("/api/v1/me", headers=headers).json()["id"]
-        assert client.get("/api/v1/me", headers=headers).json() == {
-            "id": owner_id, "role": "user", "display_name": "Người dùng kiểm thử", "email": "verified@example.test"}
+        profile = client.get("/api/v1/me", headers=headers).json()
+        assert profile["display_name"] == "Người dùng kiểm thử" and profile["email"] == "verified@example.test"
+        assert profile["profile_required"] is True and profile["age"] is None
+        free = client.get("/api/v1/me/entitlements", headers=headers).json()
+        assert free["active"] and free["remaining"] == 3 and free["plan"]["price_vnd"] == 0
+        assert client.post("/api/v1/analyses", json={"symbol": "FPT", "target_session": "2026-10-14"}, headers=headers | {"Idempotency-Key": "incomplete-profile"}).json()["code"] == "PROFILE_REQUIRED"
+        assert client.patch("/api/v1/me/profile", json={"display_name": "  Khách hàng  ", "date_of_birth": "2999-01-01", "phone_number": "0901234567"}, headers=headers).status_code == 422
+        profile = client.patch("/api/v1/me/profile", json={"display_name": "  Khách hàng  ", "date_of_birth": "1995-01-15", "phone_number": "0901234567"}, headers=headers).json()
+        assert profile["display_name"] == "Khách hàng" and profile["phone_number"] == "+84901234567" and profile["age"] >= 30 and not profile["profile_required"]
+        with session_factory(engine)() as db, db.begin():
+            from service.onboarding import grant_signup
+            account = db.get(Account, owner_id)
+            period = grant_signup(db, account)
+            assert period.order_id is None and period.payment_id is None
+            period.valid_until = int(time.time())-1
         # A legacy/orphan bucket must not grant product access in any environment.
         with session_factory(engine)() as db, db.begin():
             db.add(QuotaBucket(account_id=owner_id, valid_from=int(time.time())-10,
@@ -117,7 +130,7 @@ def test_google_exchange_browser_binding_and_role_isolation(tmp_path, monkeypatc
         buckets = client.get("/api/v1/me/usage", headers=headers).json()["buckets"]
         assert next(bucket for bucket in buckets if bucket["id"] == bucket_id)["reserved"] == 1
         with session_factory(engine)() as db, db.begin():
-            period = db.scalar(select(Subscription).where(Subscription.account_id == owner_id))
+            period = db.scalar(select(Subscription).where(Subscription.account_id == owner_id, Subscription.grant_key.is_(None)))
             period.valid_until = int(time.time())-1
         assert client.get("/api/v1/me/entitlements", headers=headers).json()["active"] is False
         denied = client.post("/api/v1/analyses", json=analysis_body,
@@ -142,7 +155,9 @@ def test_google_exchange_browser_binding_and_role_isolation(tmp_path, monkeypatc
         result = client.get("/api/v1/auth/google/callback", params={"state": params["state"][0], "code": "updated-profile"})
         result = client.post("/api/v1/auth/exchange", json={"code": result.json()["exchange_code"]}, headers=origin)
         current = client.get("/api/v1/me", headers={"Authorization": "Bearer " + result.json()["access_token"]}).json()
-        assert current == {"id": owner_id, "role": "user", "display_name": "Tên mới đã xác minh", "email": None}
+        assert current["id"] == owner_id and current["display_name"] == "Khách hàng" and current["email"] is None
+        with session_factory(engine)() as db:
+            assert len(list(db.scalars(select(Subscription).where(Subscription.grant_key.is_not(None))))) == 1
     with session_factory(engine)() as db:
         assert len(list(db.scalars(select(Account).where(Account.google_sub.is_not(None))))) == 1
     engine.dispose()
