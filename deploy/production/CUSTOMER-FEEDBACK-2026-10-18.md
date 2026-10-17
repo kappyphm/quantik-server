@@ -36,3 +36,31 @@ See the restriction and official source in 22-customer-screening-presentation.md
 Five-stock production result lists remain unverified because no publication
 has met the unchanged 95% source coverage threshold. No fixtures or reduced
 coverage policy were introduced to manufacture a result for this release.
+
+## Subsequent user clarifications
+
+The customer-facing scan launch/rescan controls were reverted. Source
+`00b95cd` automatically loads the latest publication; `74d3f4e` restores a
+results-first layout with no launch banner or slot selector. Eight targeted
+desktop/mobile checks passed for automatic polling, consistent run replacement,
+access denial and waiting/error states. The deployed assets were additionally
+checked in both viewports with explicitly mocked API responses: automatic
+latest loads/refreshes, no scan controls, no slot selector and no scan mutations.
+
+The user then chose temporary mock candles rather than waiting for licensed
+chart integration. Source `7213010` restores labelled sample candles/volume,
+daily/weekly/monthly controls and a direct real-data link. It removes the
+blocked embedded widget and inactive indicator controls. Backend Quant inputs,
+entitlements and admission gates are unchanged. Final web image:
+`sha256:ee2a91f3770451cb27081029b29bb38ccc4ac546efca22d880c5ec59eba84262`.
+
+Public production browser checks at 1440px/390px verified the explicit mock
+label, 48 daily/12 monthly sample candles, timeframe changes, correct external
+symbol/timeframe link, no iframe, no JS errors and no horizontal overflow.
+Only web was recreated. Real-data chart direction is in 23-chart-delivery.md.
+
+The focused admin-backfill test passed after pinning its API clock to the
+existing deterministic test clock. It verifies denial for anonymous/customer
+callers, authenticated admin execution, audited idempotency and publication
+ordering. This clock change is confined to tests, with no production auth or
+scheduling exception.

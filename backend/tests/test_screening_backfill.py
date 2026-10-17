@@ -9,7 +9,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
-from service import scheduling, screening, screening_backfill, scheduled_worker, ingestion
+from service import scheduling, screening, screening_backfill, scheduled_worker, ingestion, config_api
 from service.api import create_app
 from service.market_data import DataError, normalize_history, normalize_universe, publish_manifest, save_history, save_universe
 from service.models import Account, AuditEvent, PublishedScreening, ScheduledTask, ScreeningResult, ScreeningRun
@@ -25,6 +25,7 @@ def test_backfill_api_worker_and_monotonic_publication(tmp_path, monkeypatch):
     clock = SimpleNamespace(time=lambda: instant.timestamp())
     monkeypatch.setattr(scheduling, "time", clock)
     monkeypatch.setattr(screening_backfill, "time", clock)
+    monkeypatch.setattr(config_api, "time", clock)
     private, public = tmp_path/"private.pem", tmp_path/"public.pem"
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     private.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
