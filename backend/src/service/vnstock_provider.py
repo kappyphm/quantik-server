@@ -64,7 +64,7 @@ class VnstockProvider:
         retryable = type(exc).__name__ in {"NetworkError", "RateLimitedError", "ProviderError", "CircuitOpenError"}
         return DataError(code, retryable, 60 if retryable else None)
 
-    def call(self, operation):
+    def call(self, operation, *, operation_name: str = "unknown", source: str | None = None, symbol: str | None = None):
         with self.sessions() as db, db.begin():
             reserve_provider_call(db, self.limits)
         try:
@@ -72,6 +72,10 @@ class VnstockProvider:
                 return operation()
         except self.error_type as exc:
             error = self.safe_error(exc)
+            from service.telemetry import emit
+            status = getattr(exc, "status", None)
+            emit("provider.request_failed", operation=operation_name, source=source, symbol=symbol,
+                code=error.code, http_status=status if type(status) is int else None, retryable=error.retryable)
             if error.retryable:
                 with self.sessions() as db, db.begin():
                     db.execute(update(ProviderGate).where(ProviderGate.name == "vnstock")
@@ -79,7 +83,8 @@ class VnstockProvider:
             raise error from None
 
     def universe(self) -> dict:
-        result = normalize_universe(self.call(lambda: self.reference.equity.list_by_exchange(source="vci")))
+        result = normalize_universe(self.call(lambda: self.reference.equity.list_by_exchange(source="vci"),
+            operation_name="universe", source="vci"))
         result["provenance"] = "LIVE_UNVERIFIED"
         from service.screening_validation import certify_universe
         return certify_universe(result)
@@ -88,12 +93,16 @@ class VnstockProvider:
                 input_mode: str = "COMPLETED_DAILY", minimum_bars: int = 120) -> DailyHistory:
         if kind not in {"EQUITY", "INDEX"}:
             raise DataError("INVALID_ASSET_KIND")
-        # Pin VCI for both: the deployed SDK exposes the index route, and the
-        # live KBS index source currently returns VNSTOCK_SOURCE_UNAVAILABLE.
+        if start > target_session:
+            raise DataError("INVALID_DATE_WINDOW")
+        # A daily window contains at most one bar per calendar day. Request its
+        # full capacity without asking a source for an unrelated 20,000 bars.
+        row_limit = min(20000, (target_session-start).days+1)
         source = "vci"
         asset = self.market.equity(symbol) if kind == "EQUITY" else self.market.index(symbol)
         frame = self.call(lambda: asset.ohlcv(start=start.isoformat(), end=target_session.isoformat(),
-            interval="1D", limit=20000, source=source, floating=None))
+            interval="1D", limit=row_limit, source=source, floating=None),
+            operation_name="daily_history", source=source, symbol=symbol)
         args = dict(symbol=symbol, kind=kind, source=source, target_session=target_session,
             observed_at=datetime.now(timezone.utc), input_mode=input_mode, minimum_bars=minimum_bars,
             provenance="LIVE_UNVERIFIED")
@@ -105,7 +114,8 @@ class VnstockProvider:
                 raise
             secondary_source = "kbs" if kind == "INDEX" else "vnd"
             secondary = self.call(lambda: asset.ohlcv(start=start.isoformat(), end=target_session.isoformat(),
-                interval="1D", limit=20000, source=secondary_source, floating=None))
+                interval="1D", limit=row_limit, source=secondary_source, floating=None),
+                operation_name="history_correction", source=secondary_source, symbol=symbol)
             from service.provider_repair import replace_invalid_ohlc
             repaired, repairs = replace_invalid_ohlc(frame, secondary, secondary_source)
             history = normalize_history(repaired, **args)
