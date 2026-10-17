@@ -1,4 +1,4 @@
-from entitlement_fixtures import paid_bucket
+from entitlement_fixtures import paid_bucket, analysis_calendar
 import time
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
@@ -99,11 +99,16 @@ def test_google_exchange_browser_binding_and_role_isolation(tmp_path, monkeypatc
         assert denied.status_code == 403 and denied.json()["code"] == "NO_ENTITLEMENT"
         with session_factory(engine)() as db, db.begin():
             bucket_id = paid_bucket(db, owner_id, valid_from=int(time.time())-10, valid_until=int(time.time())+1000, quota_total=5, active_limit=2).id
+            analysis_calendar(db)
         analysis_body = {"symbol": "FPT", "target_session": "2026-10-14"}
         job_headers = headers | {"Idempotency-Key": "http-fixture-job"}
         result = client.post("/api/v1/analyses", json=analysis_body, headers=job_headers)
-        assert result.status_code == 202
-        job_id = result.json()["id"]
+        assert result.status_code == 503 and result.json()["code"] == "DATA_NOT_READY"
+        with session_factory(engine)() as db, db.begin():
+            assert db.get(QuotaBucket, bucket_id).daily_created == 0
+            from service import jobs
+            from datetime import date
+            job_id = jobs.admit(db, owner_id, "FPT", date(2026, 10, 14), "http-fixture-job").id
         assert client.post("/api/v1/analyses", json=analysis_body, headers=job_headers).json()["id"] == job_id
         assert client.get("/api/v1/analyses", headers=headers).json()["items"][0]["id"] == job_id
         assert client.get("/api/v1/analyses/unknown", headers=headers).status_code == 404

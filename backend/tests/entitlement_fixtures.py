@@ -8,6 +8,13 @@ from service.models import BankPayment, Job, PlanVersion, PurchaseOrder, QuotaBu
 from service.reports import SECTION_NAMES
 
 
+def analysis_calendar(db):
+    from service.calendar_reference import calendar_2026
+    from service.operational_config import activate, create_version
+    calendar = create_version(db, "TRADING_CALENDAR", calendar_2026(), None)
+    activate(db, calendar.id, None, "Configure calendar for isolated analysis tests", None)
+
+
 def paid_bucket(db, account_id, *, quota_total=20, active_limit=2, valid_from=None, valid_until=None):
     start = int(time.time())-10 if valid_from is None else valid_from
     end = start+3600 if valid_until is None else valid_until

@@ -1,5 +1,5 @@
 """Report transport and minimum completeness contract; numerical parity is separate."""
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -34,6 +34,8 @@ class Report(BaseModel):
     symbol: str
     evaluated_at: datetime
     data_as_of: datetime
+    target_session: date | None = None
+    data_observed_at: datetime | None = None
     input_mode: Literal["COMPLETED_DAILY"]
     versions: dict
     sections: dict[str, Section]

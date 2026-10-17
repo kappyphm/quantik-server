@@ -190,7 +190,9 @@ class AnalysisWorker:
                 final = finalize_member(inputs["member"], inputs["history"].frame(), inputs["reference"],
                     inputs["config"], job.inputs.get("sizing") or None)
                 report = assemble_report(final, job_id=job.id, evaluated_at=datetime.fromtimestamp(inputs["evaluated_at"], timezone.utc),
-                    data_as_of=datetime.fromisoformat(inputs["history"].payload["metadata"]["observed_at"]),
+                    data_as_of=datetime.combine(job.target_session, datetime.min.time(), timezone.utc),
+                    target_session=job.target_session,
+                    data_observed_at=datetime.fromisoformat(inputs["history"].payload["metadata"]["observed_at"]),
                     versions=inputs["versions"], config=inputs["config"], warnings=inputs["warnings"])
                 if heartbeat.lost.is_set():
                     raise jobs.JobError("STALE_EXECUTION")
@@ -238,6 +240,8 @@ def wake_waiters(sessions, settings: Settings) -> int:
             except DataError as exc:
                 if not exc.retryable:
                     jobs.fail_waiting(db, job.id, exc.code)
+                else:
+                    job.reason = exc.code
                 continue
             if jobs.wake_data(db, job.id):
                 count += 1

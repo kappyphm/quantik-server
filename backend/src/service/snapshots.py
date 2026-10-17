@@ -66,14 +66,17 @@ def build_market_snapshot(sessions, manifest_id: str, config: QuantConfig, *, mi
     evaluation = datetime.fromtimestamp(now, timezone.utc)
     evaluation_day = evaluation.astimezone(ZoneInfo("Asia/Ho_Chi_Minh")).date()
     with sessions() as db:
+        if operation_guard:
+            operation_guard(db)
         manifest = db.get(DataManifest, manifest_id)
         if not manifest:
             raise DataError("MANIFEST_NOT_FOUND")
         data, index, sectors = manifest_frames(db, manifest, config.MIN_HISTORY)
         universe = db.get(UniverseVersion, manifest.universe_id)
         members = universe.payload["members"]
-        pointer = db.get(PublishedModel, "weekly-lightgbm")
-        model = db.get(ModelVersion, pointer.model_id) if pointer else None
+        from service.analysis_readiness import model_for_session
+        selected_model = model_for_session(db, manifest.target_session, config, now=now)
+        model = db.get(ModelVersion, selected_model) if selected_model else None
         model_age = (evaluation_day - model.cutoff_session).days if model else None
         if model and (model_age < 0 or model_age >= 28 or model.cutoff_session > manifest.target_session):
             model = None
@@ -103,6 +106,8 @@ def build_market_snapshot(sessions, manifest_id: str, config: QuantConfig, *, mi
         baselines, excluded = {}, {s: "HISTORY_OR_SECTOR_UNAVAILABLE" for s in members if s not in data}
         for symbol, frame in sorted(data.items()):
             with sessions() as db, db.begin():
+                if operation_guard:
+                    operation_guard(db)
                 renewed = db.execute(update(MarketSnapshot).where(MarketSnapshot.id == snapshot_id,
                     MarketSnapshot.execution_token == token, MarketSnapshot.lease_until > int(time.time()))
                     .values(lease_until=int(time.time()) + 600))

@@ -39,16 +39,8 @@ def completed_manifest(db: Session, target: date, settings: Settings) -> DataMan
         DataManifest.input_mode == "COMPLETED_DAILY").order_by(DataManifest.revision_order.desc()).limit(1))
     if manifest is None:
         raise DataError("COMPLETED_MANIFEST_NOT_READY", True)
-    if settings.allow_fixture_analysis and settings.environment != "production":
-        return manifest
-    reference = db.get(UniverseVersion, manifest.universe_id)
-    if not reference or reference.payload.get("provenance") != "LIVE_VALIDATED":
-        raise DataError("UNIVERSE_NOT_VALIDATED", True)
-    rows = list(db.execute(select(HistoryRevision.id, HistoryRevision.payload["metadata"])
-        .where(HistoryRevision.id.in_(list(manifest.histories.values())))))
-    if len(rows) != len(manifest.histories) or any(metadata.get("provenance") != "LIVE_VALIDATED" or
-            metadata.get("adjustment") != "VERIFIED" for _, metadata in rows):
-        raise DataError("LIVE_COMPLETED_DATA_NOT_VALIDATED", True)
+    from service.analysis_readiness import validate_manifest
+    validate_manifest(db, manifest, settings)
     return manifest
 
 
@@ -95,16 +87,15 @@ def execute(sessions: sessionmaker[Session], settings: Settings, task: Scheduled
         if run.status != "READY":
             raise DataError(run.reason or "SCREENING_NOT_READY", run.status == "WAITING_DATA")
         return {"screening_run_id": run.id, "status": run.status}
-    with sessions() as db:
-        manifest_id = completed_manifest(db, task.target_session, settings).id
-        if task.kind == "SNAPSHOT":
-            pointer = db.get(PublishedModel, "weekly-lightgbm")
-            model = db.get(ModelVersion, pointer.model_id) if pointer else None
-            if not model or model.status != "PUBLISHED" or not 0 <= (task.target_session-model.cutoff_session).days < 28:
-                raise DataError("PUBLISHED_MODEL_NOT_READY", True)
     from service.quant.configuration import QuantConfig
     from dataclasses import replace
     config = replace(QuantConfig(), PRICE_INPUT_UNIT="VND")
+    with sessions() as db:
+        manifest_id = completed_manifest(db, task.target_session, settings).id
+        if task.kind == "SNAPSHOT":
+            from service.analysis_readiness import model_for_session
+            if not model_for_session(db, task.target_session, config) and not settings.allow_degraded_analysis:
+                raise DataError("PUBLISHED_MODEL_NOT_READY", True)
     if task.kind == "SNAPSHOT":
         from service.snapshots import build_market_snapshot
         snapshot = build_market_snapshot(sessions, manifest_id, config, operation_guard=guard)

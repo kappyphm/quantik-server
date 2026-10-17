@@ -137,6 +137,17 @@ def main() -> None:
         engine = make_engine(settings.database_url)
         sessions = session_factory(engine)
         try:
+            if args.command in {"build-snapshot", "train-model"} and args.manifest_id:
+                from service.analysis_readiness import validate_manifest, model_for_session
+                from service.models import DataManifest
+                config = replace(QuantConfig(), PRICE_INPUT_UNIT="VND")
+                with sessions() as db:
+                    manifest = db.get(DataManifest, args.manifest_id)
+                    if not manifest:
+                        raise DataError("MANIFEST_NOT_FOUND")
+                    validate_manifest(db, manifest, settings)
+                    if args.command == "build-snapshot" and not settings.allow_degraded_analysis and not model_for_session(db, manifest.target_session, config):
+                        raise DataError("MODEL_NOT_READY", True)
             if args.command == "build-snapshot":
                 if not args.manifest_id:
                     parser.error("build-snapshot requires --manifest-id")

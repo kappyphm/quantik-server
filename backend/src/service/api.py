@@ -231,6 +231,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         refund = db.scalar(select(QuotaRefund).join(Reservation, Reservation.id == QuotaRefund.reservation_id)
             .where(Reservation.job_id == job.id))
         return {"id": job.id, "symbol": job.symbol, "target_session": job.target_session,
+            "created_at": job.created_at, "deadline": job.deadline, "attempt": job.attempt,
             "status": job.status, "reason": job.reason, "quota_effect": reservation.state,
             "report_id": report.id if report else None, "compute_started_at": job.compute_started_at,
             "quota_refund_id": refund.id if refund else None}
@@ -238,19 +239,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/v1/analyses", status_code=202)
     def create_analysis(body: AnalysisRequest, account=Depends(user), db=Depends(db_session),
                         idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128)):
+        from service.models import Account
+        from service.daily_limits import current_bucket
+        from service.analysis_readiness import validate_request
+        from service.market_data import DataError
+        db.scalar(select(Account).where(Account.id == account.id).with_for_update())
+        existing = db.scalar(select(Job).where(Job.account_id == account.id, Job.idempotency_key == idempotency_key))
+        if not existing:
+            if not current_bucket(db, account.id, int(time.time())):
+                raise jobs.JobError("NO_ENTITLEMENT", 403)
+            try:
+                validate_request(db, settings, body.target_session, body.symbol)
+            except DataError as exc:
+                raise jobs.JobError(exc.code, 503 if exc.retryable else 422) from None
         job = jobs.admit(db, account.id, body.symbol, body.target_session, idempotency_key,
             body.sizing.model_dump() if body.sizing else None)
         db.commit()
         return job_response(db, job)
 
+    @app.get("/api/v1/analyses/options")
+    def analysis_options(target_session: date | None = None, account=Depends(user), db=Depends(db_session)):
+        from service.analysis_readiness import options
+        return options(db, settings, target_session)
+
     @app.get("/api/v1/analyses")
-    def analyses(account=Depends(user), db=Depends(db_session), cursor: str | None = None):
-        stmt = select(Job).where(Job.account_id == account.id)
-        if cursor:
-            stmt = stmt.where(Job.id > cursor)
-        result = list(db.scalars(stmt.order_by(Job.id).limit(51)))
-        return {"items": [job_response(db, job) for job in result[:50]],
-            "next_cursor": result[49].id if len(result) > 50 else None}
+    def analyses(account=Depends(user), db=Depends(db_session), cursor: str | None = None,
+                 symbol: str | None = Query(None, pattern=r"^[A-Z0-9]{2,16}$"), limit: int = Query(20, ge=1, le=50)):
+        from service.pagination import newest, encode
+        stmt = newest(select(Job).where(Job.account_id == account.id), Job, "created_at", cursor)
+        if symbol:
+            stmt = stmt.where(Job.symbol == symbol)
+        result = list(db.scalars(stmt.limit(limit+1)))
+        return {"items": [job_response(db, job) for job in result[:limit]],
+            "next_cursor": encode(result[limit-1].created_at, result[limit-1].id) if len(result) > limit else None}
 
     @app.get("/api/v1/analyses/{job_id}")
     def analysis(job_id: str, account=Depends(user), db=Depends(db_session)):

@@ -6,11 +6,11 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, func
 
 from service import billing
 from service.jobs import JobError
-from service.models import Account, BankPayment, PlanVersion, PurchaseOrder, Subscription, QuotaBucket
+from service.models import Account, BankPayment, Job, PlanVersion, PurchaseOrder, Subscription, QuotaBucket
 from service.settings import Settings
 from service.integrations import sepay_settings
 import time
@@ -175,6 +175,8 @@ def router(settings: Settings, user: Callable, admin: Callable, db_session: Call
             Subscription.valid_from > now).order_by(Subscription.valid_from, Subscription.id).limit(1))
         db.commit()
         return {"active": bucket is not None, "bucket_id": bucket.id if bucket else None,
+            "active_jobs": db.scalar(select(func.count()).select_from(Job).where(Job.account_id == account.id,
+                Job.status.not_in(["SUCCEEDED", "FAILED", "CANCELLED"]))),
             "version": bucket.entitlement_version if bucket else None,
             "remaining": max(0, bucket.quota_total-bucket.daily_created) if bucket else 0,
             "active_limit": bucket.active_limit if bucket else 0,

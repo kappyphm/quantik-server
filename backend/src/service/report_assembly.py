@@ -1,5 +1,5 @@
 """Preserve prototype nested outputs in version-1 sections and explicit compatibility metadata."""
-from datetime import datetime
+from datetime import date, datetime
 
 from service.quant.commentary import PrototypeCommentary
 from service.quant.configuration import QuantConfig, engine_context
@@ -20,7 +20,8 @@ UNITS = {"price": "VND", "returns": "PERCENT", "ratios": "RATIO", "volume": "SHA
 
 
 def assemble_report(final: dict, *, job_id: str, evaluated_at: datetime, data_as_of: datetime,
-                    versions: dict, config: QuantConfig, warnings: list[str] | None = None) -> dict:
+                    versions: dict, config: QuantConfig, warnings: list[str] | None = None,
+                    target_session: date | None = None, data_observed_at: datetime | None = None) -> dict:
     warnings = list(warnings or []) + final.get("serialization_warnings", [])
     sections = {}
     for section, keys in FIELD_MAPPING.items():
@@ -42,6 +43,7 @@ def assemble_report(final: dict, *, job_id: str, evaluated_at: datetime, data_as
     sections["commentary"] = {"status": "AVAILABLE", "reason_codes": [], "units": {}, "metrics": narrative_metrics}
     result = {"schema_version": "1.0", "job_id": job_id, "symbol": final["symbol"],
         "evaluated_at": evaluated_at, "data_as_of": data_as_of, "input_mode": "COMPLETED_DAILY",
+        "target_session": target_session, "data_observed_at": data_observed_at,
         "versions": versions, "sections": sections, "decision": final["action"],
         "commentary": narrative_metrics, "warnings": sorted(set(warnings))}
     return Report.model_validate(result).model_dump(mode="json")

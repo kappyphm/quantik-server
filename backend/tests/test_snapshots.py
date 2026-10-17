@@ -1,4 +1,4 @@
-from entitlement_fixtures import paid_bucket
+from entitlement_fixtures import paid_bucket, analysis_calendar
 import service
 import os
 from dataclasses import asdict, replace
@@ -151,6 +151,7 @@ def test_snapshot_reference_cache_report_invariance_and_publication(tmp_path, mo
         db.add(bucket)
         db.flush()
         bucket_id = bucket.id
+        analysis_calendar(db)
 
     class ConfirmedTransport:
         fail = True
@@ -207,6 +208,9 @@ def test_snapshot_reference_cache_report_invariance_and_publication(tmp_path, mo
         assert status["status"] == "SUCCEEDED" and status["quota_effect"] == "CONSUMED"
         report = client.get("/api/v1/reports/" + status["report_id"], headers=headers)
         assert report.status_code == 200 and len(report.json()["sections"]) == 16
+        assert report.json()["target_session"] == "2026-10-14"
+        assert report.json()["data_as_of"].startswith("2026-10-14")
+        assert report.json()["data_observed_at"].startswith("2026-10-15")
         with sessions() as db:
             assert db.scalar(select(func.count()).select_from(AnalysisReport)) == 1
             assert db.scalar(select(func.count()).select_from(Inbox)) == 1
@@ -230,8 +234,12 @@ def test_snapshot_reference_cache_report_invariance_and_publication(tmp_path, mo
         for symbol in ["S00", "S01"]:
             result = client.post("/api/v1/analyses", json={"symbol": symbol, "target_session": "2026-10-13"},
                 headers=headers | {"Idempotency-Key": "missing-" + symbol})
-            assert result.status_code == 202
-            waiting_ids.append(result.json()["id"])
+            assert result.status_code == 503 and result.json()["code"] == "DATA_NOT_READY"
+            # Exercise jobs admitted before a readiness change independently of
+            # the HTTP admission gate, which now rejects missing inputs.
+            with sessions() as db, db.begin():
+                from service import jobs
+                waiting_ids.append(jobs.admit(db, account_id, symbol, pd.Timestamp("2026-10-13").date(), "missing-"+symbol).id)
         before = len(transport.events)
         dispatch_once(sessions, transport)
         for event in transport.events[before:]:
