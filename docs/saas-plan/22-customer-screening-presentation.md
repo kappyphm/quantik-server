@@ -1,7 +1,7 @@
 # Customer screening presentation
 
-Customer clarification on 2026-10-18 keeps the presentation banner followed
-by at most five leading stocks and five distribution warnings.
+Customer clarification on 2026-10-18 restores the results-first page with
+at most five leading stocks and five distribution warnings. There is no launch banner.
 Customers no longer choose a screening slot or browse every internal group.
 
 The authenticated customer API returns only symbol, exchange, group score,
