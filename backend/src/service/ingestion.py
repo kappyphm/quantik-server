@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from service.db import make_engine, session_factory
 from service.market_data import DataError, checksum, publish_manifest, save_history, save_universe
-from service.models import HistoryRevision
+from service.models import HistoryRevision, UniverseVersion
 from service.settings import Settings
 from service.vnstock_provider import VnstockProvider
 from service.integrations import read as read_integration
@@ -51,11 +51,27 @@ def ingest_market(settings: Settings, start: date, target_session: date,
         guard()
         provider = VnstockProvider(key, sessions)
         guard()
-        payload = provider.universe()
-        with sessions() as db, db.begin():
-            if operation_guard:
-                operation_guard(db)
-            universe = save_universe(db, payload)
+        current_day = datetime.now(ZoneInfo("Asia/Ho_Chi_Minh"))
+        day_start = int(current_day.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+        universe = None
+        if resume:
+            from service.screening_validation import eligible
+            with sessions() as db:
+                candidate = db.scalar(select(UniverseVersion).where(UniverseVersion.created_at >= day_start)
+                    .order_by(UniverseVersion.created_at.desc(), UniverseVersion.id).limit(1))
+                if candidate and checksum(candidate.payload) == candidate.checksum and eligible(candidate.payload, universe=True):
+                    universe = candidate
+        if universe is None:
+            payload = provider.universe()
+            payload["reference_date"] = current_day.date().isoformat()
+            if payload.get("screening_validation"):
+                from service.screening_validation import certify_universe
+                payload = certify_universe(payload)
+            with sessions() as db, db.begin():
+                if operation_guard:
+                    operation_guard(db)
+                universe = save_universe(db, payload)
+        payload = universe.payload
         members = payload["members"]
         if selected_symbols and not set(selected_symbols).issubset(members):
             raise DataError("UNKNOWN_INSTRUMENT")

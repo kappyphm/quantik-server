@@ -160,7 +160,7 @@ def test_ingestion_resume_preserves_provider_budget(tmp_path, monkeypatch):
     url, engine, sessions = database(tmp_path, monkeypatch)
     monkeypatch.setenv("VNSTOCK_API_KEY", "fixture-not-a-secret")
     settings = Settings(_env_file=None, environment="test", database_url=url)
-    calls, should_limit, should_wait = [], [True], [True]
+    calls, should_limit, should_wait, universe_calls = [], [True], [True], []
     target, start = date(2026, 10, 15), date(2021, 1, 1)
 
     class Provider:
@@ -168,7 +168,9 @@ def test_ingestion_resume_preserves_provider_budget(tmp_path, monkeypatch):
             pass
 
         def universe(self):
-            return {"members": {s: {"exchange": "HOSE", "sector": "10"} for s in ("AAA", "BBB", "CCC", "DDD")}, "provenance": "LIVE_UNVERIFIED"}
+            universe_calls.append(True)
+            from service.screening_validation import certify_universe
+            return certify_universe({"members": {s: {"exchange": "HOSE", "sector": "10"} for s in ("AAA", "BBB", "CCC", "DDD")}, "provenance": "LIVE_UNVERIFIED"})
 
         def history(self, symbol, start, target_session, **kwargs):
             calls.append(symbol)
@@ -199,6 +201,7 @@ def test_ingestion_resume_preserves_provider_budget(tmp_path, monkeypatch):
     assert calls == ["VNINDEX", "AAA", "BBB", "BBB", "CCC", "DDD", "CCC"]
     fourth = ingestion.ingest_market(settings, start, target, resume=True)
     assert fourth["manifest_id"] == third["manifest_id"] and len(calls) == 7
+    assert len(universe_calls) == 1  # Resume must not re-fetch a verified daily reference.
     guarded = []
 
     def yield_after_index(db):
