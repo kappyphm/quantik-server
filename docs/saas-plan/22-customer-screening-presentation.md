@@ -21,8 +21,9 @@ generic waiting state.
 Quant automatically selects the backend's latest completed session, while
 unresolved submissions retain their pinned session/idempotency key for replay.
 The date stays visible in confirmation, history and the report.
-Chart workspaces embed TradingView directly, keeping timeframe and indicator
-controls and removing sample-price charts and the source chooser.
+After the restriction below was verified, the user chose explicitly labelled
+sample charts temporarily. See 23-chart-delivery.md for the current delivery
+and the later real-chart design. The source chooser remains removed.
 
 Production inspection found that the embedded widget rejects HOSE:FPT with
 "This symbol is only available on TradingView". An iframe and working controls
