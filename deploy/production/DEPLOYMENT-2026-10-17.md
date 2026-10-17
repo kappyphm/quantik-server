@@ -1,16 +1,17 @@
 # Quant request, signup profile and Free release
 
-Release: `20261017-quant-onboarding-02`, deployed through the existing backup,
+Release: `20261017-quant-onboarding-03`, deployed through the existing backup,
 migration and readiness procedure on 2026-10-17. This is an incremental delivery;
 live Quant/model acceptance remains open.
 
 ## Source and images
 
 - Backend: `013ab96` onboarding, `91ba831` complete history window and application
-  image update, `bef7cb0` public Free offer, `fa41636` corroborated candle repair.
+  image update, `bef7cb0` public Free offer, `fa41636` corroborated candle repair,
+  `2b5aa90` daily reference reuse on resumed ingestion.
 - Frontend: `c92dc39` Quant integration, `75aa604` profile/Free views,
   `46ca7a0` public Free offer.
-- Backend image: `sha256:5cf00ee91f219dfe5d8e1b5d2e0ea3774ff0104282e22dba0cd0bab94c3863bb`.
+- Backend image: `sha256:8b4a16df57c84abc2ecfec5491e5b289ffd11fb601dc2c6e4f18c4f1b167250e`.
 - Frontend image: `sha256:d610f1b2a4aee374d0c90aa417e741170690edb7b456bec3270e755db77e8acd`.
 - Backend uses the pinned existing runtime base
   `kappyphm/quantik@sha256:b5e63314483ccf352c0b7b4f593de5c1d10dc61a1df495f353d00b30528b41c4`.
@@ -56,6 +57,19 @@ KBS has a valid record that day but invalid candles on other dates. The deployed
 repair policy replaces only invalid candles from a valid second-source record,
 requires120 valid common anchors and no close divergence over0.5%, and records
 both source-record checksums. It never calculates a replacement price.
+
+Further source rejection was isolated to re-fetching the exchange universe.
+Resumed ingestion now reuses a checksum-valid, screening-certified universe
+collected that Vietnam day. Fresh references include a reference date, so an
+unchanged membership still produces a new daily observation. It does not change
+the universe's Quant verification/provenance or reuse yesterday's reference.
+
+Attempt4 reused the stored daily universe (1519 members, matching checksum and
+screening evidence), then hit source rejection on VNINDEX. A bounded diagnostic
+isolated the failure to its primary VCI history request, before correction.
+At that observation the task remained WAITING with its scheduled retry; history
+and manifest counts were still zero. The deployed correction path has focused
+test evidence but has not yet completed a live stored index revision.
 
 Explicit `limit=20000` returned1299 VNINDEX rows for the tested window, compared
 with1000 without it. FPT VCI/VND comparison covered1299 sessions with maximum
