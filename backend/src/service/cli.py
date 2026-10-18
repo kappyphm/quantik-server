@@ -16,7 +16,7 @@ from service.settings import Settings
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="quantik")
-    parser.add_argument("command", choices=["migrate", "generate-keys", "generate-integration-key", "seed-admin", "ingest-market", "train-model", "publish-model", "build-snapshot", "worker", "dispatcher", "dependencies", "reconciler", "recover-delivery", "screen-market", "seed-operations", "scheduler", "schedule-worker", "backup", "restore-backup", "verify-backup"])
+    parser.add_argument("command", choices=["migrate", "generate-keys", "generate-integration-key", "seed-admin", "ingest-market", "train-model", "publish-model", "build-snapshot", "worker", "dispatcher", "dependencies", "reconciler", "recover-delivery", "screen-market", "seed-operations", "grant-free-all", "scheduler", "schedule-worker", "backup", "restore-backup", "verify-backup"])
     parser.add_argument("--target-session", type=date.fromisoformat)
     parser.add_argument("--start", type=date.fromisoformat, default=date(2021, 1, 1))
     parser.add_argument("--symbol", action="append")
@@ -70,6 +70,15 @@ def main() -> None:
         print("Integration encryption key generated; back it up separately and restrict file access")
     elif args.command == "migrate":
         command.upgrade(Config("backend/alembic.ini"), "head")
+    elif args.command == "grant-free-all":
+        from service.onboarding import grant_all_customers
+        engine = make_engine(settings.database_url)
+        try:
+            with session_factory(engine)() as db, db.begin():
+                result = grant_all_customers(db)
+            print(result)
+        finally:
+            engine.dispose()
     elif args.command == "seed-operations":
         from sqlalchemy import select
         from service.models import Account
@@ -80,6 +89,8 @@ def main() -> None:
                 actor = db.scalar(select(Account).where(Account.role == "admin", Account.enabled.is_(True)).limit(1))
                 if actor is None:
                     parser.error("seed-operations requires an existing enabled seed-admin")
+                from service.onboarding import ensure_signup_plan
+                ensure_signup_plan(db)
                 result = seed_defaults(db, actor.id)
             print({"active_versions": result})
         finally:

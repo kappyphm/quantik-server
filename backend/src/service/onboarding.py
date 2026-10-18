@@ -5,37 +5,72 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from service.billing import audit
-from service.models import Account, PlanVersion, QuotaBucket, Subscription
+from service.models import Account, AuditEvent, PlanVersion, QuotaBucket, Subscription
 
-FREE_PLAN_ID = "04dfe4bc-755c-4dc2-9891-b3c0e13c8001"
+FREE_PLAN_ID = "04dfe4bc-755c-4dc2-9891-b3c0e13c8002"
 
 
-def grant_signup(db, account: Account, now: int | None = None) -> Subscription:
+def ensure_signup_plan(db) -> PlanVersion:
+    """New immutable version; prior Free terms remain in historical records."""
+    from service.operational_config import insert_for
+    db.execute(insert_for(db)(PlanVersion).values(id=FREE_PLAN_ID, name="Free", price_vnd=0,
+        duration_days=30, analysis_quota=5, active_limit=1,
+        features={"screening": True, "analysis": True}, available=False, created_at=int(time.time()))
+        .on_conflict_do_nothing(index_elements=["id"]))
+    return db.get(PlanVersion, FREE_PLAN_ID)
+
+
+def grant_signup(db, account: Account, now: int | None = None, *, grant_key: str | None = None) -> Subscription:
     now = int(time.time()) if now is None else now
     db.scalar(select(Account).where(Account.id == account.id).with_for_update())
-    key = "signup:" + account.id
+    key = grant_key or "signup:" + account.id
     previous = db.scalar(select(Subscription).where(Subscription.grant_key == key))
     if previous:
         return previous
-    plan = db.get(PlanVersion, FREE_PLAN_ID)
-    if not plan:
-        raise RuntimeError("Signup plan migration is missing")
-    from service.daily_limits import day_bounds
-    bucket = QuotaBucket(account_id=account.id, valid_from=now,
-        valid_until=min(now+plan.duration_days*86400, day_bounds(now)[1]), quota_total=plan.analysis_quota,
-        active_limit=plan.active_limit, entitlement_version=plan.id)
+    plan = ensure_signup_plan(db)
+    paid_end = db.scalar(select(func.max(Subscription.valid_until)).where(
+        Subscription.account_id == account.id, Subscription.grant_key.is_(None), Subscription.valid_until > now))
+    start = max(now, paid_end or now)
+    for previous_free in db.scalars(select(Subscription).where(Subscription.account_id == account.id,
+            Subscription.grant_key.is_not(None), Subscription.valid_until > now)):
+        previous_free.valid_until = max(previous_free.valid_from, now)
+    from service.daily_limits import day_bounds, created_today
+    bucket = QuotaBucket(account_id=account.id, valid_from=start,
+        valid_until=min(start+plan.duration_days*86400, day_bounds(start)[1]), quota_total=plan.analysis_quota,
+        active_limit=plan.active_limit, entitlement_version=plan.id,
+        daily_created=created_today(db, account.id, now) if start == now else 0)
     db.add(bucket)
     db.flush()
     period = Subscription(account_id=account.id, plan_id=plan.id, bucket_id=bucket.id,
-        grant_key=key, valid_from=now, valid_until=now+plan.duration_days*86400)
+        grant_key=key, valid_from=start, valid_until=start+plan.duration_days*86400)
     db.add(period)
     db.flush()
     bucket.subscription_id = period.id
     audit(db, "user.signup_free_granted", {"subscription_id": period.id, "plan_id": plan.id}, account.id)
     return period
+
+
+def grant_all_customers(db, now: int | None = None) -> dict:
+    """Once-only Free offer for every customer, explicitly requested by owner."""
+    ensure_signup_plan(db)
+    db.scalar(select(PlanVersion).where(PlanVersion.id == FREE_PLAN_ID).with_for_update())
+    if db.scalar(select(AuditEvent.id).where(AuditEvent.action == "operations.free5_offer_completed").limit(1)):
+        count = db.scalar(select(func.count()).select_from(Subscription)
+            .where(Subscription.grant_key.like("free5-launch:%")))
+        return {"created": 0, "existing": count, "daily_limit": 5, "duration_days": 30}
+    created = existing = 0
+    for account in db.scalars(select(Account).where(Account.role == "user").order_by(Account.id)):
+        key = "free5-launch:" + account.id
+        previous = db.scalar(select(Subscription.id).where(Subscription.grant_key == key))
+        grant_signup(db, account, now, grant_key=key)
+        existing += int(previous is not None)
+        created += int(previous is None)
+    result = {"created": created, "existing": existing, "daily_limit": 5, "duration_days": 30}
+    audit(db, "operations.free5_offer_completed", result)
+    return result
 
 
 def today() -> date:

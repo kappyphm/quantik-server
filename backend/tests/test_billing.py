@@ -26,6 +26,9 @@ def test_prepaid_payment_contract_and_atomic_entitlement(tmp_path, monkeypatch):
     command.upgrade(Config("backend/alembic.ini"), "head")
     engine = make_engine(url)
     sessions = session_factory(engine)
+    from service.onboarding import ensure_signup_plan
+    with sessions() as db, db.begin():
+        ensure_signup_plan(db)
     private, public = tmp_path/"private.pem", tmp_path/"public.pem"
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     private.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
@@ -227,7 +230,7 @@ def test_prepaid_payment_contract_and_atomic_entitlement(tmp_path, monkeypatch):
         from service.onboarding import FREE_PLAN_ID
         public = client.get("/api/v1/plans").json()["items"]
         assert [p["id"] for p in public] == [FREE_PLAN_ID, replacement_id]
-        assert public[0]["price_vnd"] == 0 and public[0]["daily_request_limit"] == 3
+        assert public[0]["price_vnd"] == 0 and public[0]["daily_request_limit"] == 5
         assert client.post(f"/api/v1/admin/plans/{FREE_PLAN_ID}/availability", json={"available": True}, headers=admin_auth).json()["code"] == "SIGNUP_PLAN_MANAGED"
 
     engine.dispose()

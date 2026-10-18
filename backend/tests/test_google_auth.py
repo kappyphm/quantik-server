@@ -90,7 +90,7 @@ def test_google_exchange_browser_binding_and_role_isolation(tmp_path, monkeypatc
         assert profile["display_name"] == "Người dùng kiểm thử" and profile["email"] == "verified@example.test"
         assert profile["profile_required"] is True and profile["age"] is None
         free = client.get("/api/v1/me/entitlements", headers=headers).json()
-        assert free["active"] and free["remaining"] == 3 and free["plan"]["price_vnd"] == 0
+        assert free["active"] and free["remaining"] == 5 and free["plan"]["price_vnd"] == 0
         assert client.post("/api/v1/analyses", json={"symbol": "FPT", "target_session": "2026-10-14"}, headers=headers | {"Idempotency-Key": "incomplete-profile"}).json()["code"] == "PROFILE_REQUIRED"
         assert client.patch("/api/v1/me/profile", json={"display_name": "  Khách hàng  ", "date_of_birth": "2999-01-01", "phone_number": "0901234567"}, headers=headers).status_code == 422
         profile = client.patch("/api/v1/me/profile", json={"display_name": "  Khách hàng  ", "date_of_birth": "1995-01-15", "phone_number": "0901234567"}, headers=headers).json()
