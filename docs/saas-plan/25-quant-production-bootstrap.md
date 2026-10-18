@@ -165,3 +165,22 @@ checksums remain checked by numerical consumers; manifest_frames explicitly
 verifies provider evidence before training/snapshot computation. Four focused
 validation/readiness/model tests passed. Deploy only API while the live cdf2
 snapshot continues; do not restart it for this API performance fix.
+
+### Deployment and public API recheck
+
+- Window release `02cd65d` deployed as backend image
+  `sha256:0552f76516ddc0d8a692c7d2cf9c855bd68f3c8a1168bb13bbd8f0f7a45bbca4`.
+  Old snapshot 27ad8293 was closed as FAILED/ANALYSIS_WINDOW_SUPERSEDED after its
+  diagnostic process was confirmed terminated; the operation was audited.
+- Replacement snapshot `f49900eb-a50c-46b4-8cee-2d6d249eb233` is BUILDING with
+  cdf2 recipes. Log is under `releases/20261018-quant-analysis-window/`.
+  Current cdf2 component-key inspection found 15 READY and one BUILDING out of
+  830 stored equity histories. This is processing evidence, not final coverage.
+- Admission performance release `99b1dfa` built as image
+  `sha256:ad0302b9cf482ba00bcc39b2de4e1b9b1aa3caf5c8ceae577fe4028d28d2558d`.
+  Only API was recreated; active snapshot process was retained. Other consumers
+  still use the compatible window image and should be aligned when idle.
+- Two real public HTTPS `/api/v1/analyses/options` calls returned 200 in 1.416
+  and 1.397 seconds, ready=true, target 2026-10-16, 830 available symbols. No
+  customer request or quota was consumed by these checks. The end-to-end Quant
+  report and daily scheduled-run completion are still pending.
