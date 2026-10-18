@@ -69,3 +69,13 @@ A production FPT audit fetched four windows (345/338/341/274 rows), covering all
 matched explicit adjusted prices; maximum difference was 7.275957614183426e-12
 VND. Evidence is in server release `adjustment-FPT.log`. This one-symbol result
 does not certify the entire training manifest or authorize model publication.
+
+The full-manifest audit was started on production with the committed audit
+implementation loaded in the diagnostic process, without replacing running
+application services. Output: `adjustment-manifest.jsonl` in the same release.
+At the first 24 processed stocks, 5 matched and 19 differed. This is not a final
+acceptance result. AAH was investigated separately: over 443 common sessions in
+2025-2026, close differed on 416 sessions (up to 296 VND), while isolated open
+differences reached 400 VND. These are not floating-point noise. Endpoint price
+semantics/source differences must be resolved before interpreting the batch as
+an exclusion list; no stored candles or eligibility flags were changed.
