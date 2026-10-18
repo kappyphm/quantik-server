@@ -59,8 +59,8 @@ def cached_baseline(sessions, key: str, compute) -> dict:
         raise
 
 
-def build_market_snapshot(sessions, manifest_id: str, config: QuantConfig, *, minimum_coverage: float = .8, operation_guard=None) -> MarketSnapshot:
-    if not 0 < minimum_coverage <= 1:
+def build_market_snapshot(sessions, manifest_id: str, config: QuantConfig, *, minimum_coverage: float = 0, operation_guard=None) -> MarketSnapshot:
+    if not 0 <= minimum_coverage <= 1:
         raise DataError("INVALID_SNAPSHOT_COVERAGE")
     now = int(time.time())
     evaluation = datetime.fromtimestamp(now, timezone.utc)

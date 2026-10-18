@@ -96,3 +96,11 @@ that corporate-action adjustment has not been independently audited. Model
 evidence records PROVIDER_OHLCV_CONTRACT scope and the acceptance policy version.
 The legacy `live_data_validated` boolean denotes accepted source evidence;
 it does not assert an independent reconstruction of corporate actions.
+
+Snapshot publication also previously had an agent-added 80% whole-universe
+coverage default. Removed that default to match the same availability policy as
+screening: process available histories, record exclusions and actual coverage,
+and retain the minimum five usable stocks required for cross-sectional ranking.
+Explicit callers can still request a coverage bound. The snapshot test now
+publishes at 6/8 coverage and verifies missing-stock exclusion; four usable
+stocks still fail without replacing the published snapshot.

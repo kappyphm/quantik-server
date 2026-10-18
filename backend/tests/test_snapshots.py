@@ -42,8 +42,8 @@ def test_snapshot_reference_cache_report_invariance_and_publication(tmp_path, mo
     frames = {}
     histories = {}
     with sessions() as db, db.begin():
-        universe = save_universe(db, normalize_universe(pd.DataFrame({"symbol": [f"S{i:02}" for i in range(6)],
-            "exchange": ["HOSE"] * 6, "icb_code_lv2": ["sector"] * 6})))
+        universe = save_universe(db, normalize_universe(pd.DataFrame({"symbol": [f"S{i:02}" for i in range(8)],
+            "exchange": ["HOSE"] * 8, "icb_code_lv2": ["sector"] * 8})))
         for i in range(6):
             symbol = f"S{i:02}"
             price = (80+i*10)*np.exp(.001*n+.02*np.sin(n/12+i))
@@ -81,6 +81,8 @@ def test_snapshot_reference_cache_report_invariance_and_publication(tmp_path, mo
     monkeypatch.setattr(snapshots, "compute_baseline", baseline_fixture)
     snapshot = snapshots.build_market_snapshot(sessions, manifest_id, config)
     assert snapshot.status == "READY" and len(calls) == 6
+    assert snapshot.payload["coverage_ratio"] == .75
+    assert snapshot.payload["excluded"]["S06"] == "HISTORY_OR_SECTOR_UNAVAILABLE"
     assert snapshots.build_market_snapshot(sessions, manifest_id, config).id == snapshot.id
     assert len(calls) == 6
     payload = snapshot.payload
