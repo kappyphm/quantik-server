@@ -49,3 +49,23 @@ publication, snapshot construction, a real customer analysis request through
 the UI/API, and verification of the complete persisted report and daily quota.
 New-account Google signup and automatic Free grant also require end-to-end
 production evidence; existing profile/Free implementation alone is insufficient.
+
+## Adjustment audit implementation
+
+Added `verify_adjusted_prices` and provider `adjustment_evidence`. The audit uses
+explicit VCI adjusted OHLC fields (VND), converts aware trading timestamps to
+Vietnam session dates, requires every saved session, rejects duplicate dates,
+wrong instruments/sources and nonfinite prices, and tolerates only 0.000001 VND
+floating-point noise. It returns checksums and scope without modifying data.
+Evidence explicitly says this is provider-series consistency, not independent
+corporate-action reconstruction. No production readiness gate has been bypassed.
+
+The live endpoint returned only 1,000 rows for a limit of 20,000. Therefore the
+provider method uses disjoint 500-calendar-day windows through the shared rate
+limiter; missing sessions still fail verification. Eight focused tests passed.
+
+A production FPT audit fetched four windows (345/338/341/274 rows), covering all
+1,298 stored sessions from 2021-08-03 through 2026-10-16. All four OHLC fields
+matched explicit adjusted prices; maximum difference was 7.275957614183426e-12
+VND. Evidence is in server release `adjustment-FPT.log`. This one-symbol result
+does not certify the entire training manifest or authorize model publication.

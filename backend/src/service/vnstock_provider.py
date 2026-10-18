@@ -2,7 +2,7 @@
 import contextlib
 import io
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from importlib.metadata import version
 
 from sqlalchemy import func, select, update
@@ -125,3 +125,34 @@ class VnstockProvider:
         history.payload["metadata"]["requested_start"] = start.isoformat()
         from service.screening_validation import certify_history
         return certify_history(history)
+
+    def adjustment_evidence(self, history: DailyHistory) -> dict:
+        """Audit every saved equity candle against explicit VCI adjusted OHLC.
+
+        VCI trade_history can cap a response at 1,000 rows even when a larger
+        limit is requested. Disjoint 500-calendar-day windows cannot reach that
+        cap for daily records. Each request uses the shared provider budget.
+        """
+        import pandas as pd
+        from service.adjustment_validation import verify_adjusted_prices
+
+        meta = history.payload["metadata"]
+        if (meta.get("source") != "vci" or meta.get("kind") != "EQUITY"
+                or history.input_mode != "COMPLETED_DAILY" or not history.payload["bars"]):
+            raise DataError("ADJUSTMENT_REFERENCE_CONTRACT")
+        start = date.fromisoformat(history.payload["bars"][0]["session"])
+        frames = []
+        while start <= history.target_session:
+            stop = min(history.target_session, start + timedelta(days=499))
+            frame = self.call(lambda: self.market.equity(history.symbol).trade_history(
+                start=start.isoformat(), end=stop.isoformat(), limit=1000, source="vci"),
+                operation_name="adjustment_validation", source="vci", symbol=history.symbol)
+            if (frame.attrs.get("source") != "vci" or frame.attrs.get("symbol") != history.symbol
+                    or any(value for key, value in frame.attrs.items()
+                        if key.startswith("tier_cap_") or key == "request_cap_rows")):
+                raise DataError("ADJUSTMENT_REFERENCE_CONTRACT")
+            frames.append(frame)
+            start = stop + timedelta(days=1)
+        reference = pd.concat(frames, ignore_index=True)
+        reference.attrs = {"source": "vci", "symbol": history.symbol}
+        return verify_adjusted_prices(history, reference)
