@@ -1,16 +1,11 @@
 # Customer screening presentation
 
-Customer clarification on 2026-10-18 restores the results-first page with
-at most five leading stocks and five distribution warnings. There is no launch banner.
-Customers no longer choose a screening slot or browse every internal group.
-
-The authenticated customer API returns only symbol, exchange, group score,
-closing price in VND, daily change ratio and a short recommendation. It does
-not send criteria, weights, formula details, manifests, scheduler failures,
-coverage internals or provider validation records. Results are restricted to
-OVERALL and DISTRIBUTION, ranks 1–5. A cursor cannot reveal further ranks.
-Publication date and a generic stale indicator remain visible so older results
-are not presented as current. Admin operational diagnostics remain available.
+The latest customer clarification on 2026-10-18 restores two top-five selections,
+presented as full information tables with a wide per-symbol detail modal.
+See [26-screening-table.md](26-screening-table.md) for the current contract.
+The full-universe pagination request is superseded. Publication date and the
+generic stale indicator remain visible. Internal formulas, criteria definitions,
+manifests and operational diagnostics remain excluded from customer responses.
 
 The page automatically reads the latest publication when opened. Customers have
 no launch or rescan button. Read-only refreshes continue while the page is visible

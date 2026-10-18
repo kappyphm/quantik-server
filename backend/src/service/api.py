@@ -18,7 +18,7 @@ from service import jobs
 from service.models import AnalysisReport, Job, QuotaBucket, Reservation
 from service.reports import ReportResult
 from service.models import PublishedScreening, ScreeningResult, ScreeningRun, UniverseVersion, QuotaRefund
-from service.screening_contracts import ScreeningPage
+from service.screening_contracts import ScreeningPage, ScreeningDetail
 from service.settings import Settings
 from service.telemetry import HttpMetrics, ProcessMonitor, emit
 from service.operations_health import Collector
@@ -358,7 +358,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/v1/screenings/{run_id}/results", response_model=ScreeningPage)
     def screening_results(run_id: str, group: Literal["OVERALL", "DISTRIBUTION"] = "OVERALL",
-                          limit: int = Query(default=5, ge=1, le=5),
                           account=Depends(user), db=Depends(db_session)):
         from service.screening_access import require_access
         require_access(db, account.id)
@@ -368,19 +367,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if run.status != "READY":
             raise jobs.JobError("SCREENING_RUN_NOT_READY", 409)
         require_screening_source(run)
-        columns = {"OVERALL": ScreeningResult.overall_rank, "DISTRIBUTION": ScreeningResult.distribution_rank}
-        query = select(ScreeningResult).where(ScreeningResult.run_id == run_id)
-        rank = columns[group]
-        rows = db.scalars(query.where(rank.is_not(None), rank <= 5).order_by(rank).limit(limit))
-        items = []
-        for row in rows:
-            payload = row.payload
-            prices = payload.get("price_summary", {})
-            items.append({"symbol": row.symbol, "exchange": payload.get("exchange"),
-                "score": payload["groups"]["DISTRIBUTION"]["score"] if group == "DISTRIBUTION" else payload["overall_score"],
-                "price_vnd": prices.get("close"), "change_ratio": prices.get("pct_change_1d"),
-                "recommendation": payload.get("assessment", {}).get("recommendation")})
-        return {"run_id": run_id, "group": group, "items": items, "next_cursor": None}
+        from service.screening_views import top_results
+        return top_results(db, run_id, group)
+
+    @app.get("/api/v1/screenings/{run_id}/symbols/{symbol}", response_model=ScreeningDetail)
+    def screening_symbol(run_id: str, symbol: str, account=Depends(user), db=Depends(db_session)):
+        from service.screening_access import require_access
+        from service.screening_views import detail_view
+        require_access(db, account.id)
+        run = db.get(ScreeningRun, run_id)
+        if not run:
+            raise jobs.JobError("NOT_FOUND", 404)
+        if run.status != "READY":
+            raise jobs.JobError("SCREENING_RUN_NOT_READY", 409)
+        require_screening_source(run)
+        row = db.get(ScreeningResult, (run_id, symbol.upper()))
+        if not row or not any(rank is not None and 1 <= rank <= 5 for rank in (row.overall_rank, row.distribution_rank)):
+            raise jobs.JobError("NOT_FOUND", 404)
+        return detail_view(run, row)
 
     @app.get("/api/v1/instruments")
     def instruments(cursor: str | None = None, exchange: Literal["HOSE", "HNX", "UPCOM"] | None = None,

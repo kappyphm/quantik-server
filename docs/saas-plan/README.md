@@ -26,6 +26,7 @@ Tài liệu đủ để bắt đầu implementation. Các mục PROPOSED là thi
 | [14 — Observability](14-observability.md) | Private health/metrics, process heartbeat, logs và alert templates |
 | [15 — Backup/recovery](15-backup-and-recovery.md) | Consistent DB bundles, checksum, separate-target restore và recovery runbook |
 | [16 — Admin integrations](16-admin-integrations.md) | SePay/Vnstock config API, encrypted secrets, revision và runtime precedence |
+| [26 — Screening table](26-screening-table.md) | Hai bảng top 5 và modal chi tiết |
 
 ## Quy ước
 

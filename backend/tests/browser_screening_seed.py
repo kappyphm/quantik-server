@@ -41,10 +41,11 @@ def main():
     settings = Settings(_env_file=None, database_url=url, environment="test", jwt_private_key_path=private, jwt_public_key_path=public)
     engine = make_engine(url); sessions = session_factory(engine)
     observed = datetime(2026, 10, 15, 16, 10, tzinfo=ZoneInfo("Asia/Ho_Chi_Minh"))
+    symbols = ["FPT", "HPG", *[f"T{i:03}" for i in range(1, 79)]]
     with sessions() as db, db.begin():
-        universe = save_universe(db, normalize_universe(pd.DataFrame({"symbol": ["FPT", "HPG"], "exchange": ["HOSE", "HOSE"]})))
+        universe = save_universe(db, normalize_universe(pd.DataFrame({"symbol": symbols, "exchange": ["HOSE"]*len(symbols)})))
         refs = {}
-        for symbol in ["VNINDEX", "FPT", "HPG"]:
+        for symbol in ["VNINDEX", *symbols]:
             x = np.arange(80); close = 58 + .03*x + 2*np.sin(x/2)
             frame = pd.DataFrame({"time": pd.bdate_range(end=observed.date(), periods=80), "open": close*.999, "high": close*1.015, "low": close*.985, "close": close, "volume": np.round(200000+10000*np.sin(x/3))})
             refs[symbol] = save_history(db, normalize_history(frame, symbol=symbol, kind="INDEX" if symbol=="VNINDEX" else "EQUITY", source="vci", target_session=observed.date(), observed_at=observed, minimum_bars=50))

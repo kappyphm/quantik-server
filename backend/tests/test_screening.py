@@ -171,26 +171,44 @@ def test_screening_publication_deadline_all_results_and_api(tmp_path, monkeypatc
         assert latest.status_code == 200 and latest.json()["id"] == morning.id
         assert latest.json()["stale"]
         assert not {"latest_attempt", "manifest_id", "summary", "schedule", "reason"} & latest.json().keys()
-        page = client.get(f"/api/v1/screenings/{morning.id}/results?limit=2", headers=headers).json()
+        base = f"/api/v1/screenings/{morning.id}"
+        page = client.get(base+"/results?group=OVERALL", headers=headers).json()
         assert [r["symbol"] for r in page["items"]] == ["AAA", "BBB"]
-        assert page["next_cursor"] is None
-        assert set(page["items"][0]) == {"symbol", "exchange", "score", "price_vnd", "change_ratio", "recommendation"}
-        assert client.get(f"/api/v1/screenings/{morning.id}/results?group=ALL", headers=headers).status_code == 422
-        assert client.get(f"/api/v1/screenings/{morning.id}/results?group=STRONG", headers=headers).status_code == 422
-        assert client.get(f"/api/v1/screenings/{morning.id}/results?limit=6", headers=headers).status_code == 422
-        assert len(client.get(f"/api/v1/screenings/{morning.id}/results?group=OVERALL", headers=headers).json()["items"]) == 2
+        assert page["group"] == "OVERALL" and "total_pages" not in page
+        assert page["items"][0]["groups"]["STRONG"]["total_count"] == 7
+        assert "criteria" not in str(page) and "manifest_id" not in str(page)
+        assert client.get(base+"/results?group=ALL", headers=headers).status_code == 422
+        assert client.get(base+"/symbols/NEW", headers=headers).status_code == 404
+        detail = client.get(base+"/symbols/aaa", headers=headers)
+        assert detail.status_code == 200, detail.text
+        detail = detail.json()
+        assert detail["run_id"] == morning.id and detail["item"]["symbol"] == "AAA"
+        assert detail["assessment"]["investor_note"]
+        assert detail["market"]["change_5d_ratio"] == pytest.approx(morning.summary["market_context"]["detail"]["trend"]["pct_change_5d"]/100)
+        assert not {"series", "screening_adjustments", "criteria", "input_fields", "manifest_id"} & detail["market"].keys()
+        assert client.get(base+"/symbols/NOPE", headers=headers).status_code == 404
+        assert client.get(base+"/symbols/AAA").status_code == 401
+        assert client.get(f"/api/v1/screenings/{failed.id}/symbols/AAA", headers=headers).status_code == 409
         with sessions() as db, db.begin():
             from copy import deepcopy
             seed = db.get(ScreeningResult, (morning.id, "AAA"))
-            for rank in range(3, 9):
+            seed.distribution_rank = 7
+            db.get(ScreeningResult, (morning.id, "BBB")).distribution_rank = 8
+            for rank in range(3, 79):
                 payload = deepcopy(seed.payload)
-                payload["symbol"] = f"CAP{rank}"
+                payload["symbol"] = f"CAP{rank:03}"
+                # Best and distribution selections must follow their independent persisted ranks.
+                payload["groups"]["STRONG"]["score"] = rank
                 db.add(ScreeningResult(run_id=morning.id, symbol=payload["symbol"],
                     overall_rank=rank, strong_rank=None, accumulation_rank=None,
-                    distribution_rank=rank, payload=payload))
-        capped = client.get(f"/api/v1/screenings/{morning.id}/results?cursor=5", headers=headers).json()
-        assert len(capped["items"]) == 5 and capped["next_cursor"] is None
-        assert not {"CAP6", "CAP7", "CAP8"} & {r["symbol"] for r in capped["items"]}
+                    distribution_rank=9-rank if rank <= 8 else rank, payload=payload))
+        best = client.get(base+"/results?group=OVERALL&page_size=100&page=2&cursor=5", headers=headers).json()
+        worst = client.get(base+"/results?group=DISTRIBUTION", headers=headers).json()
+        assert [r["symbol"] for r in best["items"]] == ["AAA", "BBB", "CAP003", "CAP004", "CAP005"]
+        assert [r["symbol"] for r in worst["items"]] == ["CAP008", "CAP007", "CAP006", "CAP005", "CAP004"]
+        assert "CAP078" not in str(best) + str(worst)
+        assert client.get(base+"/symbols/CAP008", headers=headers).status_code == 200
+        assert client.get(base+"/symbols/CAP078", headers=headers).status_code == 404
         assert client.get("/api/v1/instruments?limit=2", headers=headers).json()["next_cursor"] == "BBB"
         assert client.get("/api/v1/screenings/latest").status_code == 401
         # The automatic screening contract accepts normalized live inputs without
@@ -210,6 +228,7 @@ def test_screening_publication_deadline_all_results_and_api(tmp_path, monkeypatc
             period = db.scalar(select(Subscription).where(Subscription.account_id == account.id))
             period.valid_until = now - 1
         assert client.get(f"/api/v1/screenings/{morning.id}/results", headers=headers).status_code == 403
+        assert client.get(f"/api/v1/screenings/{morning.id}/symbols/AAA", headers=headers).status_code == 403
     engine.dispose()
 
 
