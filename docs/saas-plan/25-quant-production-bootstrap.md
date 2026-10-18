@@ -184,3 +184,26 @@ snapshot continues; do not restart it for this API performance fix.
   and 1.397 seconds, ready=true, target 2026-10-16, 830 available symbols. No
   customer request or quota was consumed by these checks. The end-to-end Quant
   report and daily scheduled-run completion are still pending.
+
+## Real request admission and durable waiting
+
+Following the owner's Free-five rollout, submitted an actual FPT request for
+2026-10-16 through public HTTPS on the owner's known account. A normal temporary
+technical session was created with explicit operations audit and revoked in a
+finally transaction. This verifies authenticated API execution, not Google login.
+No account identity, role or profile was changed.
+
+- Public POST `/analyses`: 202, job `9da9c28a-c27a-4087-965c-b466e7819e15`.
+- Repeated identical POST with the same idempotency key: 202, same job ID.
+- Actual entitlement changed from created_today=0 to 1, remaining=4 of 5.
+- Dispatcher/worker processed the message: persisted inbox count 1; job became
+  WAITING_DATA/SNAPSHOT_NOT_READY, attempt 1, reservation RESERVED, consumed=0.
+- Dependency request is active. Job deadline allows 24 hours for data readiness.
+  The request has not produced a report yet; it must be followed to terminal
+  success and the actual report verified before full acceptance.
+- Production snapshot progress by exact cdf2 component keys: 99 READY and one
+  BUILDING of 819 histories meeting minimum history plus sector requirements
+  (12.1% processed). The manifest contains 830 equities; 11 do not meet those
+  Quant input requirements. No stored baseline error was found in the 99.
+- Request evidence log: `releases/20261018-free-five/quant-request-acceptance.log`.
+  Temporary access/refresh tokens were never printed or saved in this log.
