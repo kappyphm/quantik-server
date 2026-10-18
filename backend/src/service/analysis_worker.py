@@ -79,8 +79,8 @@ def resolve_inputs(db, job: Job, settings: Settings) -> dict:
         raise DataError("HISTORY_MISMATCH")
     if checksum(history.payload) != history.checksum:
         raise DataError("HISTORY_CHECKSUM_MISMATCH")
-    if not settings.allow_fixture_analysis and (history.payload["metadata"].get("provenance") != "LIVE_VALIDATED"
-            or history.payload["metadata"].get("adjustment") != "VERIFIED"):
+    from service.quant_data_validation import history_accepted
+    if not settings.allow_fixture_analysis and not history_accepted(history.payload):
         raise DataError("LIVE_DATA_NOT_VALIDATED", True)
     warnings = list(row.warnings or []) + history.payload["metadata"].get("warnings", [])
     evaluated_at = job.evaluated_at or int(time.time())

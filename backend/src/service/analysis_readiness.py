@@ -90,12 +90,17 @@ def validate_manifest(db, manifest: DataManifest, settings) -> None:
     if settings.allow_fixture_analysis:
         return
     universe = db.get(UniverseVersion, manifest.universe_id)
-    if not universe or universe.payload.get("provenance") != "LIVE_VALIDATED":
+    from service.quant_data_validation import universe_accepted, history_accepted
+    if not universe or not universe_accepted(universe.payload):
         raise DataError("UNIVERSE_NOT_VALIDATED", True)
-    rows = list(db.execute(select(HistoryRevision.id, HistoryRevision.payload["metadata"])
-        .where(HistoryRevision.id.in_(list(manifest.histories.values())))))
-    if len(rows) != len(manifest.histories) or any(meta.get("provenance") != "LIVE_VALIDATED"
-            or meta.get("adjustment") != "VERIFIED" for _, meta in rows):
+    count = 0
+    for payload in db.scalars(select(HistoryRevision.payload)
+            .where(HistoryRevision.id.in_(list(manifest.histories.values())))
+            .execution_options(yield_per=1)):
+        if not history_accepted(payload):
+            raise DataError("QUANT_DATA_NOT_VALIDATED", True)
+        count += 1
+    if count != len(manifest.histories):
         raise DataError("QUANT_DATA_NOT_VALIDATED", True)
 
 

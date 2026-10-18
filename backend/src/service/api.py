@@ -386,9 +386,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def instruments(cursor: str | None = None, exchange: Literal["HOSE", "HNX", "UPCOM"] | None = None,
                     limit: int = Query(default=100, ge=1, le=500), account=Depends(user), db=Depends(db_session)):
         query = select(UniverseVersion)
-        if not settings.allow_fixture_analysis:
-            query = query.where(UniverseVersion.payload["provenance"].as_string() == "LIVE_VALIDATED")
-        reference = db.scalar(query.order_by(UniverseVersion.created_at.desc(), UniverseVersion.id).limit(1))
+        from service.quant_data_validation import universe_accepted
+        reference = next((row for row in db.scalars(query.order_by(
+            UniverseVersion.created_at.desc(), UniverseVersion.id).execution_options(yield_per=1))
+            if settings.allow_fixture_analysis or universe_accepted(row.payload)), None)
         if not reference:
             raise jobs.JobError("INSTRUMENTS_NOT_READY", 503)
         selected = [(symbol, meta) for symbol, meta in sorted(reference.payload["members"].items())

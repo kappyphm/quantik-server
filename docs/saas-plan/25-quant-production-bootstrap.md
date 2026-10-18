@@ -79,3 +79,20 @@ acceptance result. AAH was investigated separately: over 443 common sessions in
 differences reached 400 VND. These are not floating-point noise. Endpoint price
 semantics/source differences must be resolved before interpreting the batch as
 an exclusion list; no stored candles or eligibility flags were changed.
+
+## Acceptance policy correction
+
+Stopped the diagnostic batch deliberately after identifying incompatible close
+semantics. AAH's recent OHLCV close equals raw trading close; the nominal
+adjusted-close field instead approximates average trading price. An exact
+cross-endpoint match must not become a production publication gate.
+
+Quant now accepts the pinned Vnstock 5.0.3 OHLCV contract with content-bound
+source/unit/OHLC/session evidence already checked by ingestion. This matches the
+prototype's use of provider-adjusted OHLCV. Fixtures, unsupported versions,
+uncertified input, altered content and provisional data remain rejected.
+No provenance or adjustment flags are rewritten. Reports retain the warning
+that corporate-action adjustment has not been independently audited. Model
+evidence records PROVIDER_OHLCV_CONTRACT scope and the acceptance policy version.
+The legacy `live_data_validated` boolean denotes accepted source evidence;
+it does not assert an independent reconstruction of corporate actions.
