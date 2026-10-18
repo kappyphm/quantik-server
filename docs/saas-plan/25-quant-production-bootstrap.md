@@ -128,3 +128,26 @@ stocks still fail without replacing the published snapshot.
 - Focused source/readiness/model checks passed (4 tests); the full snapshot and
   customer-flow fixture test passed again with partial reference coverage.
   Actual customer-report and new Google-signup verification remain outstanding.
+
+## Current production signup evidence and analysis-window fix
+
+Read-only production inspection now finds three retained signup Free
+subscriptions linked to Google accounts with EXCHANGED OAuth flows. All three
+have a completed profile (name, email, date of birth and phone present),
+`profile_required=false`, and a persisted profile-update audit. Each entitlement
+is exactly 2,592,000 seconds (30 days), quota 3/day, one active request, with no
+purchase order or payment. One account has two exchanged flows but still one
+signup subscription, demonstrating no regrant on its later login. No personal
+profile values were exported or changed for this inspection. This supersedes
+the earlier absence of real signup evidence, but not the pending Quant report.
+
+The initial live snapshot used the entire 1,298-session training history for
+each stock. Prototype `fetch_ohlcv` and `fetch_index` explicitly tail the analysis
+lookback (252 by default); the service had not applied this configured window.
+The old diagnostic build was deliberately stopped for this confirmed defect,
+not because a polling timeout elapsed. Training history remains unchanged.
+Snapshot/reference inputs and customer finalization now use the same configured
+analysis window, and engine recipe `prototype-v7-cdf2` prevents reusing prior
+full-history baselines. Window isolation and the complete snapshot/customer
+fixture tests passed (2 tests). No HMM restarts, model parameters or Monte Carlo
+paths were reduced.

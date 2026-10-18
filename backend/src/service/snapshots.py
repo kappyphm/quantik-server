@@ -13,7 +13,7 @@ from service.models import ComponentResult, DataManifest, HistoryRevision, Marke
 from service.quant import engines as e
 from service.quant.assembly import directional_context
 from service.quant.baseline import compute_baseline
-from service.quant.configuration import QuantConfig, engine_context
+from service.quant.configuration import QuantConfig, analysis_window, engine_context
 from service.quant.scoring import build_reference
 from service.quant.serialization import json_metrics
 from service.quant.training import predict_snapshot
@@ -72,6 +72,8 @@ def build_market_snapshot(sessions, manifest_id: str, config: QuantConfig, *, mi
         if not manifest:
             raise DataError("MANIFEST_NOT_FOUND")
         data, index, sectors = manifest_frames(db, manifest, config.MIN_HISTORY)
+        data = {symbol: analysis_window(frame, config) for symbol, frame in data.items()}
+        index = analysis_window(index, config)
         universe = db.get(UniverseVersion, manifest.universe_id)
         members = universe.payload["members"]
         from service.analysis_readiness import model_for_session

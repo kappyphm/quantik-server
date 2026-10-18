@@ -11,7 +11,7 @@ from service import jobs
 from service.market_data import DataError, DailyHistory, checksum
 from service.canonical_json import semantic_checksum
 from service.models import Account, DataManifest, DependencyRequest, DependencyWaiter, HistoryRevision, Inbox, Job, JobAttempt, MarketSnapshot, ModelVersion, Outbox, PublishedSnapshot
-from service.quant.configuration import QuantConfig
+from service.quant.configuration import QuantConfig, analysis_window
 from service.settings import Settings
 from service.quant.versions import ENGINE_VERSION, SNAPSHOT_POLICY
 from service.delivery import Envelope, PoisonMessage
@@ -188,7 +188,7 @@ class AnalysisWorker:
                         raise
                     jobs.begin_compute(db, job.id, token, inputs["versions"])
                     current.evaluated_at = inputs["evaluated_at"]
-                final = finalize_member(inputs["member"], inputs["history"].frame(), inputs["reference"],
+                final = finalize_member(inputs["member"], analysis_window(inputs["history"].frame(), inputs["config"]), inputs["reference"],
                     inputs["config"], job.inputs.get("sizing") or None)
                 report = assemble_report(final, job_id=job.id, evaluated_at=datetime.fromtimestamp(inputs["evaluated_at"], timezone.utc),
                     data_as_of=datetime.combine(job.target_session, datetime.min.time(), timezone.utc),
