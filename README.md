@@ -239,9 +239,11 @@ overall Top 70 và coverage explicit. AM raw volume với prior-completed baseli
 Policy/window/readiness/deadline tại [09-screening-policy.md](docs/saas-plan/09-screening-policy.md).
 
 API user: GET /instruments; GET /screenings/latest?slot=ALL|AM|PM;
-GET /screenings/{run_id}/results?group=ALL|OVERALL|STRONG|ACCUMULATION|DISTRIBUTION&limit=50&cursor=...
-ALL cursor theo symbol; ranking cursor theo rank. OpenAPI có ScreeningPage/ScreeningItem/ScreeningGroup/CriterionRecord.
-Latest trả published run + latest attempt + stale reasons; failed run không thay published pointer.
+GET /screenings/{run_id}/results?group=OVERALL|DISTRIBUTION (tối đa 5 mã/nhóm);
+GET /screenings/{run_id}/symbols/{symbol}.
+Two top-five tables and detail modal: [26-screening-table.md](docs/saas-plan/26-screening-table.md).
+Results chỉ trả hai nhóm top 5; OpenAPI có ScreeningPage/ScreeningItem/ScreeningDetail.
+Latest trả ngày công bố và stale; failed run không thay published pointer.
 Universe và data fixture không được phục vụ qua API mặc định; source validation vẫn chờ live credentials.
 
 Focused checks đạt boolean parity completed inputs với prototype, missing/short/index availability,
