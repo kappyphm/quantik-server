@@ -22,6 +22,10 @@ def manifest_frames(db, manifest: DataManifest, minimum_bars: int = 120) -> tupl
             raise DataError("MANIFEST_HISTORY_MISMATCH")
         if checksum(history.payload) != history.checksum:
             raise DataError("HISTORY_CHECKSUM_MISMATCH")
+        if history.payload["metadata"].get("provenance") == "LIVE_UNVERIFIED":
+            from service.quant_data_validation import history_accepted
+            if not history_accepted(history.payload):
+                raise DataError("QUANT_DATA_NOT_VALIDATED")
         frame = DailyHistory(symbol, history.target_session, history.input_mode, history.payload).frame()
         if symbol == "VNINDEX":
             index = frame

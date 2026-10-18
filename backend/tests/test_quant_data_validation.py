@@ -1,6 +1,6 @@
 from copy import deepcopy
 
-from service.quant_data_validation import history_accepted, universe_accepted
+from service.quant_data_validation import history_accepted, history_header_accepted, universe_accepted
 from service.screening_validation import certify_history, certify_universe
 from test_adjustment_validation import inputs
 
@@ -9,6 +9,7 @@ def test_provider_contract_acceptance_keeps_unverified_adjustment_warning():
     history, _ = inputs()
     payload = certify_history(history).payload
     assert history_accepted(payload)
+    assert history_header_accepted(payload["metadata"])
     assert payload["metadata"]["provenance"] == "LIVE_UNVERIFIED"
     assert payload["metadata"]["adjustment"] == "PROVIDER_ADJUSTMENT_UNVERIFIED"
     assert "CORPORATE_ACTION_ADJUSTMENT_UNVERIFIED" in payload["metadata"]["warnings"]

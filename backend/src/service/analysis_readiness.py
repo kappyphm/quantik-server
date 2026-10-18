@@ -90,14 +90,16 @@ def validate_manifest(db, manifest: DataManifest, settings) -> None:
     if settings.allow_fixture_analysis:
         return
     universe = db.get(UniverseVersion, manifest.universe_id)
-    from service.quant_data_validation import universe_accepted, history_accepted
+    from service.quant_data_validation import universe_accepted, history_header_accepted
     if not universe or not universe_accepted(universe.payload):
         raise DataError("UNIVERSE_NOT_VALIDATED", True)
     count = 0
-    for payload in db.scalars(select(HistoryRevision.payload)
+    # Admission reads only metadata; training, snapshot construction and the
+    # analysis worker verify full immutable content before numerical execution.
+    for metadata in db.scalars(select(HistoryRevision.payload["metadata"])
             .where(HistoryRevision.id.in_(list(manifest.histories.values())))
             .execution_options(yield_per=1)):
-        if not history_accepted(payload):
+        if not history_header_accepted(metadata):
             raise DataError("QUANT_DATA_NOT_VALIDATED", True)
         count += 1
     if count != len(manifest.histories):

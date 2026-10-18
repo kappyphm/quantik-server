@@ -151,3 +151,17 @@ analysis window, and engine recipe `prototype-v7-cdf2` prevents reusing prior
 full-history baselines. Window isolation and the complete snapshot/customer
 fixture tests passed (2 tests). No HMM restarts, model parameters or Monte Carlo
 paths were reduced.
+
+Public HTTPS verification with an existing signup account returned 200 for
+`/me` (all profile fields present, computed age matches birth date in Vietnam)
+and `/me/entitlements` (Free, daily limit 3, created today 0, remaining 3).
+No profile or entitlement was changed. `/analyses/options` exposed a real 502:
+the backend returned 200 after 17.339 seconds, exceeding the existing 15-second
+FE upstream timeout while decoding/checksumming the full market history.
+
+Admission preflight now projects only each revision's metadata and checks the
+pinned provider/version/ingestion-proof header. Full content and immutable
+checksums remain checked by numerical consumers; manifest_frames explicitly
+verifies provider evidence before training/snapshot computation. Four focused
+validation/readiness/model tests passed. Deploy only API while the live cdf2
+snapshot continues; do not restart it for this API performance fix.
