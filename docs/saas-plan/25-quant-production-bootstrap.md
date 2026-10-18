@@ -104,3 +104,27 @@ and retain the minimum five usable stocks required for cross-sectional ranking.
 Explicit callers can still request a coverage bound. The snapshot test now
 publishes at 6/8 coverage and verifies missing-stock exclusion; four usable
 stocks still fail without replacing the published snapshot.
+
+## Production activation
+
+- Source acceptance release `82b517a` deployed as image
+  `sha256:2f6223389957ee00691344393c431976bbdc1b384c01ff4fbf04d0b45f6e14a8`.
+- Validated the completed manifest with the new contract and verified the
+  original candidate's immutable checksum. Reused its actual trained artifact
+  unchanged, created new policy-bound evidence through `save_candidate`, then
+  called normal `promote_model`. Persisted model
+  `c56acc63-fea6-4202-b948-6723dbc943af` is PUBLISHED with
+  PROVIDER_OHLCV_CONTRACT scope and independent audit false. The old candidate
+  remains intact; no candles, adjustment flags or training metrics were edited.
+- Snapshot availability release `a73c5b4` deployed as image
+  `sha256:dd60f513d300ae8f21be69ccc1b56acf7f6b0fa44a6c083f9b99a3ef451621c0`.
+  Both deployments used the normal backup/migration/deploy sequence and kept
+  the frontend image unchanged. Snapshot and train consumers are healthy.
+- Started normal CLI `build-snapshot --manifest-id
+  c4945936-cc4c-431a-b7f5-34c34607746e` in the snapshot container. Persisted snapshot
+  `27ad8293-4112-40ff-a421-4cfd4858a1a9` is BUILDING; first two baseline components
+  were persisted. This is a live build, not evidence of completed publication.
+  Log: `/opt/quantik/releases/20261018-quant-available-snapshot/snapshot-bootstrap.log`.
+- Focused source/readiness/model checks passed (4 tests); the full snapshot and
+  customer-flow fixture test passed again with partial reference coverage.
+  Actual customer-report and new Google-signup verification remain outstanding.
