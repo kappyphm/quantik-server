@@ -207,3 +207,23 @@ No account identity, role or profile was changed.
   Quant input requirements. No stored baseline error was found in the 99.
 - Request evidence log: `releases/20261018-free-five/quant-request-acceptance.log`.
   Temporary access/refresh tokens were never printed or saved in this log.
+
+### Browser verification of the actual pending request
+
+Opened the deployed `/analysis?symbol=FPT&job=9da9c28a-c27a-4087-965c-b466e7819e15`
+with normal browser refresh/session handling on both 1440px desktop and 390px
+mobile. Temporary audited owner sessions were used and revoked afterward;
+credential values stayed in process memory, without disk or tool-output copies.
+No new request was created.
+
+Both browser checks explicitly waited for the job heading and entitlement to
+finish loading, then confirmed the real pending FPT request, remaining 4/5 daily
+requests, request history, no horizontal document overflow and no JavaScript
+errors. The initial desktop observation happened before entitlement rendering;
+the corrected check waited for its visible value rather than treating that
+transient loading state as a product defect.
+
+The same live snapshot process remains active. Exact cdf2 keys now show 122
+READY and one BUILDING (14.9% of 819 eligible inputs), with no baseline error
+recorded. The actual request remains WAITING_DATA/SNAPSHOT_NOT_READY; successful
+report construction and its browser rendering have not yet been verified.
