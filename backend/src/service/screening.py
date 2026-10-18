@@ -10,7 +10,7 @@ from service.screening_validation import eligible
 from service.models import DataManifest, HistoryRevision, PublishedScreening, ScreeningResult, ScreeningRun, UniverseVersion, new_id
 
 VN = ZoneInfo("Asia/Ho_Chi_Minh")
-POLICY = {"version": "screening-tristate-1", "minimum_history_coverage": .95,
+POLICY = {"version": "screening-tristate-2",
     "minimum_average_volume_shares": 100000, "top_n": 70,
     "AM": {"trigger": "11:30", "deadline": "12:55", "observation_end": "13:00"},
     "PM": {"trigger": "15:00", "deadline": "17:30", "completed_from": "16:00"}}
@@ -80,6 +80,7 @@ def run_screening(sessions, target_session, slot: str, *, manifest_id: str | Non
             run.status, run.reason = "FAILED", "SCREENING_DEADLINE"
             return run
         run.status, run.reason = "RUNNING", None
+        run.policy = POLICY
         run.execution_token, run.lease_until = token, int(time.time()) + 600
     try:
         with sessions() as db:
@@ -141,8 +142,6 @@ def run_screening(sessions, target_session, slot: str, *, manifest_id: str | Non
                     *scores, context["screening_adjustments"])
             results.append(result)
         coverage = ready_count / len(members) if members else 0
-        if coverage < POLICY["minimum_history_coverage"]:
-            raise DataError("SCREENING_COVERAGE_NOT_READY", True)
         rankings = rank_results(results, POLICY["top_n"])
         if not any(rankings[group] for group in ["STRONG", "ACCUMULATION", "DISTRIBUTION"]):
             raise DataError("SCREENING_ZERO_ELIGIBLE")

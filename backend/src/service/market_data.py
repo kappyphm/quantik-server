@@ -172,8 +172,8 @@ def save_universe(db: Session, payload: dict) -> UniverseVersion:
 
 
 def publish_manifest(db: Session, universe: UniverseVersion, histories: dict[str, HistoryRevision], *,
-                     target_session: date, input_mode: InputMode, minimum_coverage_ratio: float = 0.95) -> DataManifest:
-    if not 0 < minimum_coverage_ratio <= 1:
+                     target_session: date, input_mode: InputMode, minimum_coverage_ratio: float = 0) -> DataManifest:
+    if not 0 <= minimum_coverage_ratio <= 1:
         raise DataError("INVALID_COVERAGE_POLICY")
     members = universe.payload["members"]
     index = histories.get("VNINDEX")
@@ -186,7 +186,7 @@ def publish_manifest(db: Session, universe: UniverseVersion, histories: dict[str
             raise DataError("MANIFEST_UNIVERSE_CONFLICT")
     available = set(histories) & set(members)
     ratio = len(available) / len(members)
-    if ratio < minimum_coverage_ratio:
+    if not available or ratio < minimum_coverage_ratio:
         raise DataError("MANIFEST_COVERAGE_NOT_READY", retryable=True)
     refs = {symbol: history.id for symbol, history in sorted(histories.items())}
     coverage = {"expected": len(members), "available": len(available), "ratio": ratio,

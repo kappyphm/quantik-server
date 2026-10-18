@@ -81,7 +81,7 @@ def test_screening_publication_deadline_all_results_and_api(tmp_path, monkeypatc
         universe = save_universe(db, normalize_universe(pd.DataFrame({"symbol": symbols,
             "exchange": ["HOSE"]*4})))
 
-    def manifest_for(day, mode, observed, certified=False):
+    def manifest_for(day, mode, observed, certified=False, omit=()):
         histories = {}
         with sessions() as db, db.begin():
             reference = universe
@@ -89,6 +89,8 @@ def test_screening_publication_deadline_all_results_and_api(tmp_path, monkeypatc
                 from service.screening_validation import certify_universe, certify_history
                 reference = save_universe(db, certify_universe({**universe.payload, "provenance": "LIVE_UNVERIFIED"}))
             for symbol in [*symbols, "VNINDEX"]:
+                if symbol in omit:
+                    continue
                 frame = prices(day, n=10 if symbol == "NEW" else 80, volume=100 if symbol == "LOW" else 200000)
                 # LOW must remain nonnegative while failing the liquidity hard filter.
                 if symbol == "LOW":
@@ -105,12 +107,14 @@ def test_screening_publication_deadline_all_results_and_api(tmp_path, monkeypatc
             return manifest.id, histories
 
     observed = datetime(2026, 10, 14, 16, tzinfo=VN)
-    manifest_id, histories = manifest_for("2026-10-14", "COMPLETED_DAILY", observed)
+    manifest_id, histories = manifest_for("2026-10-14", "COMPLETED_DAILY", observed, omit={"LOW"})
     first = run_screening(sessions, observed.date(), "PM", manifest_id=manifest_id,
         now=datetime(2026, 10, 14, 16, 5, tzinfo=VN), allow_fixture=True)
     assert first.status == "READY", first.reason
     assert first.summary["top_symbols"] == ["AAA", "BBB"]
     assert first.summary["expected_symbols"] == 4
+    assert first.summary["ready_symbols"] == 3 and first.summary["history_coverage_ratio"] == .75
+    assert first.summary["unavailable"]["LOW"] == "HISTORY_NOT_READY"
     assert run_screening(sessions, observed.date(), "PM", manifest_id=manifest_id,
         now=datetime(2026, 10, 14, 16, 6, tzinfo=VN), allow_fixture=True).id == first.id
     with sessions() as db:

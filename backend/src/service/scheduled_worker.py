@@ -53,13 +53,23 @@ def execute(sessions: sessionmaker[Session], settings: Settings, task: Scheduled
         policy = scheduling.policy_for(db, task)
     if task.kind == "BACKFILL":
         from service.models import ScreeningRun
-        from service.ingestion import ingest_market
+        from service.ingestion import ingest_market, publish_cached_manifest
         from service.screening import run_screening
         with sessions() as db:
             ready = db.scalar(select(ScreeningRun).where(ScreeningRun.target_session == task.target_session,
                 ScreeningRun.slot == "PM", ScreeningRun.status == "READY"))
             if ready:
                 return {"screening_run_id": ready.id, "status": "READY", "reused": True}
+        start = task.target_session-timedelta(days=policy.history_calendar_days)
+        with sessions() as db, db.begin():
+            guard(db)
+            cached = publish_cached_manifest(db, start, task.target_session)
+        if cached:
+            run = run_screening(sessions, task.target_session, "PM", manifest_id=cached.id,
+                allow_fixture=settings.allow_fixture_analysis, operation_guard=guard, backfill=True)
+            if run.status == "READY":
+                return {"screening_run_id": run.id, "status": "READY", "manifest_id": cached.id,
+                    "reused_saved_histories": True}
         result = ingest_market(settings, task.target_session-timedelta(days=policy.history_calendar_days),
             task.target_session, input_mode="COMPLETED_DAILY", operation_guard=guard, resume=True)
         if not result["manifest_id"]:

@@ -33,6 +33,7 @@ do not unlock widget data: https://www.tradingview.com/widget-docs/faq/data/.
 An external chart link preserves the selected symbol/timeframe. Fully embedded
 Vietnamese candle charts remain unverified and incomplete under that restriction.
 
-This presentation change does not relax data quality: the user confirmed that
-the 95% screening readiness threshold must stay while additional sources are
-qualified. It does not certify Quant adjustment or bypass model validation.
+The later user clarification removes the added 95% screening coverage gate and
+restores per-symbol processing as in the prototype; see 24-screening-availability.md.
+Invalid candles remain excluded. Quant adjustment and model validation remain
+separate from screening publication.

@@ -76,8 +76,12 @@ def test_history_units_readiness_revisions_and_shared_budget(tmp_path, monkeypat
         assert first.payload["bars"][-1]["close"] == 103000
         index_record = save_history(db, index)
         refs = {"FPT": first, "VNINDEX": index_record}
+        with pytest.raises(DataError, match="MANIFEST_COVERAGE_NOT_READY"):
+            publish_manifest(db, reference, {"VNINDEX": index_record}, target_session=args["target_session"],
+                input_mode="COMPLETED_DAILY")
         with pytest.raises(DataError) as error:
-            publish_manifest(db, reference, refs, target_session=args["target_session"], input_mode="COMPLETED_DAILY")
+            publish_manifest(db, reference, refs, target_session=args["target_session"],
+                input_mode="COMPLETED_DAILY", minimum_coverage_ratio=0.95)
         assert error.value.code == "MANIFEST_COVERAGE_NOT_READY"
         manifest = publish_manifest(db, reference, refs, target_session=args["target_session"],
             input_mode="COMPLETED_DAILY", minimum_coverage_ratio=0.5)

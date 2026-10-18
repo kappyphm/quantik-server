@@ -191,13 +191,15 @@ def test_ingestion_resume_preserves_provider_budget(tmp_path, monkeypatch):
 
     monkeypatch.setattr(ingestion, "VnstockProvider", Provider)
     first = ingestion.ingest_market(settings, start, target, resume=True)
-    assert first["manifest_id"] is None and first["retry_after"] == 600
+    assert first["manifest_id"] and first["retry_after"] == 600
     assert calls == ["VNINDEX", "AAA", "BBB"]
     second = ingestion.ingest_market(settings, start, target, resume=True)
-    assert second["manifest_id"] is None and second["histories_available"] == 4
+    assert second["manifest_id"] and second["histories_available"] == 4
     assert calls == ["VNINDEX", "AAA", "BBB", "BBB", "CCC", "DDD"]
     third = ingestion.ingest_market(settings, start, target, resume=True)
     assert third["manifest_id"] and third["histories_available"] == 5
+    with sessions() as db, db.begin():
+        assert ingestion.publish_cached_manifest(db, start, target).id == third["manifest_id"]
     assert calls == ["VNINDEX", "AAA", "BBB", "BBB", "CCC", "DDD", "CCC"]
     # A newer timestamp must not make an obsolete SDK contract or an incomplete
     # requested window eligible for the next manifest.
