@@ -160,7 +160,7 @@ def test_ingestion_resume_preserves_provider_budget(tmp_path, monkeypatch):
     url, engine, sessions = database(tmp_path, monkeypatch)
     monkeypatch.setenv("VNSTOCK_API_KEY", "fixture-not-a-secret")
     settings = Settings(_env_file=None, environment="test", database_url=url)
-    calls, should_limit = [], [True]
+    calls, should_limit, should_wait, universe_calls = [], [True], [True], []
     target, start = date(2026, 10, 15), date(2021, 1, 1)
 
     class Provider:
@@ -168,24 +168,70 @@ def test_ingestion_resume_preserves_provider_budget(tmp_path, monkeypatch):
             pass
 
         def universe(self):
-            return {"members": {s: {"exchange": "HOSE", "sector": "10"} for s in ("AAA", "BBB", "CCC")}, "provenance": "LIVE_UNVERIFIED"}
+            universe_calls.append(True)
+            from service.screening_validation import certify_universe
+            return certify_universe({"members": {s: {"exchange": "HOSE", "sector": "10"} for s in ("AAA", "BBB", "CCC", "DDD")}, "provenance": "LIVE_UNVERIFIED"})
 
         def history(self, symbol, start, target_session, **kwargs):
             calls.append(symbol)
             if symbol == "BBB" and should_limit[0]:
                 should_limit[0] = False
                 raise DataError("PROVIDER_BUDGET_EXHAUSTED", True, 600)
-            return DailyHistory(symbol, target_session, kwargs["input_mode"], {"metadata": {"kind": kwargs["kind"],
+            if symbol == "CCC" and should_wait[0]:
+                should_wait[0] = False
+                raise DataError("TARGET_SESSION_NOT_READY", True)
+            from service.screening_validation import certify_history
+            equity = kwargs["kind"] == "EQUITY"
+            return certify_history(DailyHistory(symbol, target_session, kwargs["input_mode"], {"metadata": {"kind": kwargs["kind"],
+                "provider": "vnstock", "provider_version": "5.0.3", "source": "vci" if equity else "kbs",
+                "price_unit": "VND" if equity else "POINTS", "source_price_unit": "THOUSAND_VND" if equity else "POINTS", "volume_unit": "SHARES",
+                "target_session": target_session.isoformat(), "input_mode": kwargs["input_mode"],
                 "requested_start": start.isoformat(), "provenance": "LIVE_UNVERIFIED", "observed_at": "2026-10-15T09:01:00+00:00"},
-                "bars": [{"session": target_session.isoformat(), "open": 10000, "high": 10100, "low": 9900, "close": 10000, "volume": 100000}]})
+                "bars": [{"session": target_session.isoformat(), "open": 10000, "high": 10100, "low": 9900, "close": 10000, "volume": 100000}]}))
 
     monkeypatch.setattr(ingestion, "VnstockProvider", Provider)
     first = ingestion.ingest_market(settings, start, target, resume=True)
-    assert first["manifest_id"] is None and first["retry_after"] == 600
+    assert first["manifest_id"] and first["retry_after"] == 600
     assert calls == ["VNINDEX", "AAA", "BBB"]
     second = ingestion.ingest_market(settings, start, target, resume=True)
     assert second["manifest_id"] and second["histories_available"] == 4
-    assert calls == ["VNINDEX", "AAA", "BBB", "BBB", "CCC"]
+    assert calls == ["VNINDEX", "AAA", "BBB", "BBB", "CCC", "DDD"]
     third = ingestion.ingest_market(settings, start, target, resume=True)
-    assert third["manifest_id"] == second["manifest_id"] and len(calls) == 5
+    assert third["manifest_id"] and third["histories_available"] == 5
+    with sessions() as db, db.begin():
+        assert ingestion.publish_cached_manifest(db, start, target).id == third["manifest_id"]
+    assert calls == ["VNINDEX", "AAA", "BBB", "BBB", "CCC", "DDD", "CCC"]
+    # A newer timestamp must not make an obsolete SDK contract or an incomplete
+    # requested window eligible for the next manifest.
+    from copy import deepcopy
+    from service.market_data import save_history
+    from service.models import HistoryRevision
+    with sessions() as db, db.begin():
+        original = db.scalar(select(HistoryRevision).where(HistoryRevision.symbol == "AAA"))
+        for invalid in ("old_contract", "short_window", "empty_history"):
+            payload = deepcopy(original.payload)
+            payload.pop("symbol")
+            meta = payload["metadata"]
+            meta["observed_at"] = "2026-10-16T09:01:00+00:00"
+            if invalid == "old_contract":
+                meta["provider_version"] = "5.0.1"
+                meta["screening_validation"]["policy"] = "vnstock-5.0.1-screening-contract-1"
+            elif invalid == "short_window":
+                meta["requested_start"] = "2026-10-01"
+            else:
+                payload["bars"] = []
+            save_history(db, DailyHistory("AAA", target, "COMPLETED_DAILY", payload))
+    fourth = ingestion.ingest_market(settings, start, target, resume=True)
+    assert fourth["manifest_id"] == third["manifest_id"] and len(calls) == 7
+    assert len(universe_calls) == 1  # Resume must not re-fetch a verified daily reference.
+    guarded = []
+
+    def yield_after_index(db):
+        guarded.append(True)
+        if len(guarded) >= 6:
+            raise DataError("BACKFILL_YIELD_TO_SCHEDULE", True)
+
+    with pytest.raises(DataError, match="BACKFILL_YIELD_TO_SCHEDULE"):
+        ingestion.ingest_market(settings, start, target, operation_guard=yield_after_index)
+    assert calls[7:] == ["VNINDEX"]  # Stop at the boundary, before fetching equities.
     engine.dispose()

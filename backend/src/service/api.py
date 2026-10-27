@@ -18,10 +18,11 @@ from service import jobs
 from service.models import AnalysisReport, Job, QuotaBucket, Reservation
 from service.reports import ReportResult
 from service.models import PublishedScreening, ScreeningResult, ScreeningRun, UniverseVersion, QuotaRefund
-from service.screening_contracts import ScreeningPage
+from service.screening_contracts import ScreeningPage, ScreeningDetail
 from service.settings import Settings
 from service.telemetry import HttpMetrics, ProcessMonitor, emit
 from service.operations_health import Collector
+from service.onboarding import ProfileInput, profile_view
 
 
 class AdminLogin(BaseModel):
@@ -99,7 +100,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.exception_handler(AuthError)
     async def auth_error(request: Request, exc: AuthError):
         return JSONResponse(status_code=exc.status, content={"code": exc.code,
-            "message": "Authentication failed", "request_id": request.state.request_id})
+            "message": "Authentication failed", "request_id": request.state.request_id},
+            headers={"Retry-After": str(exc.retry_after)} if exc.retry_after else None)
 
     @app.exception_handler(jobs.JobError)
     async def job_error(request: Request, exc: jobs.JobError):
@@ -151,9 +153,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/v1/admin/auth/login")
     def login(body: AdminLogin, request: Request, response: Response, db=Depends(db_session)):
-        # Trust only direct peer address until a reverse proxy allowlist is configured.
+        from service.proxy_address import client_address
         result = request.app.state.identity.admin_login(db, body.username, body.password,
-            request.client.host if request.client else "unknown")
+            client_address(request, settings))
         return tokens(response, result, "admin")
 
     @app.post("/api/v1/admin/auth/refresh")
@@ -222,7 +224,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/v1/me")
     def profile(account=Depends(user)):
-        return {"id": account.id, "role": account.role}
+        return profile_view(account)
+
+    @app.patch("/api/v1/me/profile")
+    def update_profile(body: ProfileInput, account=Depends(user), db=Depends(db_session)):
+        from service.models import Account
+        from service.identity import audit
+        account = db.scalar(select(Account).where(Account.id == account.id).with_for_update())
+        for key, value in body.model_dump().items():
+            setattr(account, key, value)
+        account.profile_required = False
+        audit(db, "user.profile_updated", account.id)
+        db.commit()
+        return profile_view(account)
 
     def job_response(db, job):
         reservation = db.scalar(select(Reservation).where(Reservation.job_id == job.id))
@@ -230,6 +244,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         refund = db.scalar(select(QuotaRefund).join(Reservation, Reservation.id == QuotaRefund.reservation_id)
             .where(Reservation.job_id == job.id))
         return {"id": job.id, "symbol": job.symbol, "target_session": job.target_session,
+            "created_at": job.created_at, "deadline": job.deadline, "attempt": job.attempt,
             "status": job.status, "reason": job.reason, "quota_effect": reservation.state,
             "report_id": report.id if report else None, "compute_started_at": job.compute_started_at,
             "quota_refund_id": refund.id if refund else None}
@@ -237,29 +252,45 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/v1/analyses", status_code=202)
     def create_analysis(body: AnalysisRequest, account=Depends(user), db=Depends(db_session),
                         idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128)):
+        from service.models import Account
+        from service.daily_limits import current_bucket
+        from service.analysis_readiness import validate_request
+        from service.market_data import DataError
+        db.scalar(select(Account).where(Account.id == account.id).with_for_update())
+        existing = db.scalar(select(Job).where(Job.account_id == account.id, Job.idempotency_key == idempotency_key))
+        if not existing:
+            if account.profile_required:
+                raise jobs.JobError("PROFILE_REQUIRED", 403)
+            if not current_bucket(db, account.id, int(time.time())):
+                raise jobs.JobError("NO_ENTITLEMENT", 403)
+            try:
+                validate_request(db, settings, body.target_session, body.symbol)
+            except DataError as exc:
+                raise jobs.JobError(exc.code, 503 if exc.retryable else 422) from None
         job = jobs.admit(db, account.id, body.symbol, body.target_session, idempotency_key,
             body.sizing.model_dump() if body.sizing else None)
         db.commit()
         return job_response(db, job)
 
+    @app.get("/api/v1/analyses/options")
+    def analysis_options(target_session: date | None = None, account=Depends(user), db=Depends(db_session)):
+        from service.analysis_readiness import options
+        return options(db, settings, target_session)
+
     @app.get("/api/v1/analyses")
-    def analyses(account=Depends(user), db=Depends(db_session), cursor: str | None = None):
-        stmt = select(Job).where(Job.account_id == account.id)
-        if cursor:
-            stmt = stmt.where(Job.id > cursor)
-        result = list(db.scalars(stmt.order_by(Job.id).limit(51)))
-        return {"items": [job_response(db, job) for job in result[:50]],
-            "next_cursor": result[49].id if len(result) > 50 else None}
+    def analyses(account=Depends(user), db=Depends(db_session), cursor: str | None = None,
+                 symbol: str | None = Query(None, pattern=r"^[A-Z0-9]{2,16}$"), limit: int = Query(20, ge=1, le=50)):
+        from service.pagination import newest, encode
+        stmt = newest(select(Job).where(Job.account_id == account.id), Job, "created_at", cursor)
+        if symbol:
+            stmt = stmt.where(Job.symbol == symbol)
+        result = list(db.scalars(stmt.limit(limit+1)))
+        return {"items": [job_response(db, job) for job in result[:limit]],
+            "next_cursor": encode(result[limit-1].created_at, result[limit-1].id) if len(result) > limit else None}
 
     @app.get("/api/v1/analyses/{job_id}")
     def analysis(job_id: str, account=Depends(user), db=Depends(db_session)):
         return job_response(db, jobs.owned_job(db, account.id, job_id))
-
-    @app.post("/api/v1/analyses/{job_id}/cancel")
-    def cancel_analysis(job_id: str, account=Depends(user), db=Depends(db_session)):
-        job = jobs.cancel(db, account.id, job_id)
-        db.commit()
-        return job_response(db, job)
 
     @app.get("/api/v1/reports/{report_id}", response_model=ReportResult)
     def report(report_id: str, account=Depends(user), db=Depends(db_session)):
@@ -271,23 +302,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/v1/me/usage")
     def usage(account=Depends(user), db=Depends(db_session)):
+        from service.daily_limits import current_bucket
+        current_bucket(db, account.id, int(time.time()))
+        db.commit()
         return {"buckets": [{"id": b.id, "total": b.quota_total, "reserved": b.reserved,
-            "consumed": b.consumed, "active_jobs": b.active_jobs, "active_limit": b.active_limit,
+            "consumed": b.consumed, "created": b.daily_created, "quota_period": "DAY" if b.subscription_id else "LEGACY", "active_jobs": b.active_jobs, "active_limit": b.active_limit,
             "valid_from": b.valid_from, "valid_until": b.valid_until}
             for b in db.scalars(select(QuotaBucket).where(QuotaBucket.account_id == account.id)
                 .order_by(QuotaBucket.valid_from.desc()).limit(50))]}
 
     def screening_header(run):
-        return {"id": run.id, "target_session": run.target_session.isoformat(), "slot": run.slot,
-            "status": run.status, "reason": run.reason, "manifest_id": run.manifest_id,
+        return {"id": run.id, "target_session": run.target_session.isoformat(),
             "published_at": run.published_at}
 
     def require_screening_source(run):
-        if not settings.allow_fixture_analysis and run.summary.get("source_mode") != "LIVE_VALIDATED":
+        if not settings.allow_fixture_analysis and (run.summary or {}).get("source_mode") not in {"LIVE_VALIDATED", "LIVE_SCREENING_VALIDATED"}:
             raise jobs.JobError("SCREENING_LIVE_DATA_REQUIRED", 503)
 
     @app.get("/api/v1/screenings/latest")
     def screening_latest(slot: Literal["ALL", "AM", "PM"] = "ALL", account=Depends(user), db=Depends(db_session)):
+        from service.screening_access import require_access
+        require_access(db, account.id)
         query = select(ScreeningRun)
         if slot != "ALL":
             query = query.where(ScreeningRun.slot == slot)
@@ -295,7 +330,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         pointer = db.get(PublishedScreening, slot)
         if not pointer:
             return JSONResponse(status_code=503, content={"code": "SCREENING_NOT_READY",
-                "latest_attempt": screening_header(attempt) if attempt else None})
+                "retry_after_seconds": 60}, headers={"Retry-After": "60"})
         run = db.get(ScreeningRun, pointer.run_id)
         require_screening_source(run)
         reasons = []
@@ -319,48 +354,46 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 reasons.append("CALENDAR_OUT_OF_RANGE")
         if calendar_status != "READY" and int(time.time()) - run.published_at > 36*3600:
             reasons.append("PUBLICATION_AGE")
-        return {**screening_header(run), "summary": run.summary, "stale": bool(reasons), "stale_reasons": reasons,
-            "latest_attempt": screening_header(attempt) if attempt else None, "calendar_status": calendar_status}
+        return {**screening_header(run), "stale": bool(reasons), "refresh_after_seconds": 60}
 
     @app.get("/api/v1/screenings/{run_id}/results", response_model=ScreeningPage)
-    def screening_results(run_id: str, group: Literal["ALL", "OVERALL", "STRONG", "ACCUMULATION", "DISTRIBUTION"] = "ALL",
-                          cursor: str | None = None, limit: int = Query(default=50, ge=1, le=200),
+    def screening_results(run_id: str, group: Literal["OVERALL", "DISTRIBUTION"] = "OVERALL",
                           account=Depends(user), db=Depends(db_session)):
+        from service.screening_access import require_access
+        require_access(db, account.id)
         run = db.get(ScreeningRun, run_id)
         if not run:
             raise jobs.JobError("NOT_FOUND", 404)
         if run.status != "READY":
             raise jobs.JobError("SCREENING_RUN_NOT_READY", 409)
         require_screening_source(run)
-        columns = {"OVERALL": ScreeningResult.overall_rank, "STRONG": ScreeningResult.strong_rank,
-            "ACCUMULATION": ScreeningResult.accumulation_rank, "DISTRIBUTION": ScreeningResult.distribution_rank}
-        query = select(ScreeningResult).where(ScreeningResult.run_id == run_id)
-        if group == "ALL":
-            if cursor:
-                query = query.where(ScreeningResult.symbol > cursor)
-            query = query.order_by(ScreeningResult.symbol)
-        else:
-            rank = columns[group]
-            query = query.where(rank.is_not(None)).order_by(rank)
-            if cursor:
-                if not cursor.isdigit():
-                    raise jobs.JobError("INVALID_CURSOR", 422)
-                query = query.where(rank > int(cursor))
-        rows = list(db.scalars(query.limit(limit+1)))
-        items = [{**row.payload, "ranks": {"OVERALL": row.overall_rank, "STRONG": row.strong_rank,
-            "ACCUMULATION": row.accumulation_rank, "DISTRIBUTION": row.distribution_rank}} for row in rows[:limit]]
-        next_cursor = None
-        if len(rows) > limit:
-            next_cursor = rows[limit-1].symbol if group == "ALL" else str(getattr(rows[limit-1], group.lower()+"_rank"))
-        return {"run_id": run_id, "group": group, "items": items, "next_cursor": next_cursor}
+        from service.screening_views import top_results
+        return top_results(db, run_id, group)
+
+    @app.get("/api/v1/screenings/{run_id}/symbols/{symbol}", response_model=ScreeningDetail)
+    def screening_symbol(run_id: str, symbol: str, account=Depends(user), db=Depends(db_session)):
+        from service.screening_access import require_access
+        from service.screening_views import detail_view
+        require_access(db, account.id)
+        run = db.get(ScreeningRun, run_id)
+        if not run:
+            raise jobs.JobError("NOT_FOUND", 404)
+        if run.status != "READY":
+            raise jobs.JobError("SCREENING_RUN_NOT_READY", 409)
+        require_screening_source(run)
+        row = db.get(ScreeningResult, (run_id, symbol.upper()))
+        if not row or not any(rank is not None and 1 <= rank <= 5 for rank in (row.overall_rank, row.distribution_rank)):
+            raise jobs.JobError("NOT_FOUND", 404)
+        return detail_view(run, row)
 
     @app.get("/api/v1/instruments")
     def instruments(cursor: str | None = None, exchange: Literal["HOSE", "HNX", "UPCOM"] | None = None,
                     limit: int = Query(default=100, ge=1, le=500), account=Depends(user), db=Depends(db_session)):
         query = select(UniverseVersion)
-        if not settings.allow_fixture_analysis:
-            query = query.where(UniverseVersion.payload["provenance"].as_string() == "LIVE_VALIDATED")
-        reference = db.scalar(query.order_by(UniverseVersion.created_at.desc(), UniverseVersion.id).limit(1))
+        from service.quant_data_validation import universe_accepted
+        reference = next((row for row in db.scalars(query.order_by(
+            UniverseVersion.created_at.desc(), UniverseVersion.id).execution_options(yield_per=1))
+            if settings.allow_fixture_analysis or universe_accepted(row.payload)), None)
         if not reference:
             raise jobs.JobError("INSTRUMENTS_NOT_READY", 503)
         selected = [(symbol, meta) for symbol, meta in sorted(reference.payload["members"].items())

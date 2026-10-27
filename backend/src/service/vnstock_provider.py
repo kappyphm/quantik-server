@@ -2,7 +2,7 @@
 import contextlib
 import io
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from importlib.metadata import version
 
 from sqlalchemy import func, select, update
@@ -38,7 +38,7 @@ def reserve_provider_call(db, limits: dict[str, int], now: int | None = None) ->
 
 class VnstockProvider:
     def __init__(self, api_key: str, sessions):
-        if version("vnstock") != "5.0.1":
+        if version("vnstock") != "5.0.3":
             raise DataError("PROVIDER_VERSION_MISMATCH")
         self.sessions = sessions
         import vnstock
@@ -64,7 +64,7 @@ class VnstockProvider:
         retryable = type(exc).__name__ in {"NetworkError", "RateLimitedError", "ProviderError", "CircuitOpenError"}
         return DataError(code, retryable, 60 if retryable else None)
 
-    def call(self, operation):
+    def call(self, operation, *, operation_name: str = "unknown", source: str | None = None, symbol: str | None = None):
         with self.sessions() as db, db.begin():
             reserve_provider_call(db, self.limits)
         try:
@@ -72,6 +72,10 @@ class VnstockProvider:
                 return operation()
         except self.error_type as exc:
             error = self.safe_error(exc)
+            from service.telemetry import emit
+            status = getattr(exc, "status", None)
+            emit("provider.request_failed", operation=operation_name, source=source, symbol=symbol,
+                code=error.code, http_status=status if type(status) is int else None, retryable=error.retryable)
             if error.retryable:
                 with self.sessions() as db, db.begin():
                     db.execute(update(ProviderGate).where(ProviderGate.name == "vnstock")
@@ -79,20 +83,76 @@ class VnstockProvider:
             raise error from None
 
     def universe(self) -> dict:
-        result = normalize_universe(self.call(lambda: self.reference.equity.list_by_exchange(source="vci")))
+        result = normalize_universe(self.call(lambda: self.reference.equity.list_by_exchange(source="vci"),
+            operation_name="universe", source="vci"))
         result["provenance"] = "LIVE_UNVERIFIED"
-        return result
+        from service.screening_validation import certify_universe
+        return certify_universe(result)
 
     def history(self, symbol: str, start: date, target_session: date, *, kind: str = "EQUITY",
                 input_mode: str = "COMPLETED_DAILY", minimum_bars: int = 120) -> DailyHistory:
         if kind not in {"EQUITY", "INDEX"}:
             raise DataError("INVALID_ASSET_KIND")
-        source = "vci" if kind == "EQUITY" else "kbs"
+        if start > target_session:
+            raise DataError("INVALID_DATE_WINDOW")
+        # A daily window contains at most one bar per calendar day. Request its
+        # full capacity without asking a source for an unrelated 20,000 bars.
+        row_limit = min(20000, (target_session-start).days+1)
+        source = "vci"
         asset = self.market.equity(symbol) if kind == "EQUITY" else self.market.index(symbol)
         frame = self.call(lambda: asset.ohlcv(start=start.isoformat(), end=target_session.isoformat(),
-            interval="1D", source=source, floating=None))
-        history = normalize_history(frame, symbol=symbol, kind=kind, source=source, target_session=target_session,
+            interval="1D", limit=row_limit, source=source, floating=None),
+            operation_name="daily_history", source=source, symbol=symbol)
+        args = dict(symbol=symbol, kind=kind, source=source, target_session=target_session,
             observed_at=datetime.now(timezone.utc), input_mode=input_mode, minimum_bars=minimum_bars,
             provenance="LIVE_UNVERIFIED")
+        repairs = []
+        try:
+            history = normalize_history(frame, **args)
+        except DataError as exc:
+            if exc.code != "INVALID_OHLC" or input_mode != "COMPLETED_DAILY":
+                raise
+            secondary_source = "kbs" if kind == "INDEX" else "vnd"
+            secondary = self.call(lambda: asset.ohlcv(start=start.isoformat(), end=target_session.isoformat(),
+                interval="1D", limit=row_limit, source=secondary_source, floating=None),
+                operation_name="history_correction", source=secondary_source, symbol=symbol)
+            from service.provider_repair import replace_invalid_ohlc
+            repaired, repairs = replace_invalid_ohlc(frame, secondary, secondary_source)
+            history = normalize_history(repaired, **args)
+        if repairs:
+            history.payload["metadata"]["source_corrections"] = repairs
+            history.payload["metadata"]["warnings"].append("CANDLES_REPLACED_FROM_CORROBORATED_SOURCE")
         history.payload["metadata"]["requested_start"] = start.isoformat()
-        return history
+        from service.screening_validation import certify_history
+        return certify_history(history)
+
+    def adjustment_evidence(self, history: DailyHistory) -> dict:
+        """Audit every saved equity candle against explicit VCI adjusted OHLC.
+
+        VCI trade_history can cap a response at 1,000 rows even when a larger
+        limit is requested. Disjoint 500-calendar-day windows cannot reach that
+        cap for daily records. Each request uses the shared provider budget.
+        """
+        import pandas as pd
+        from service.adjustment_validation import verify_adjusted_prices
+
+        meta = history.payload["metadata"]
+        if (meta.get("source") != "vci" or meta.get("kind") != "EQUITY"
+                or history.input_mode != "COMPLETED_DAILY" or not history.payload["bars"]):
+            raise DataError("ADJUSTMENT_REFERENCE_CONTRACT")
+        start = date.fromisoformat(history.payload["bars"][0]["session"])
+        frames = []
+        while start <= history.target_session:
+            stop = min(history.target_session, start + timedelta(days=499))
+            frame = self.call(lambda: self.market.equity(history.symbol).trade_history(
+                start=start.isoformat(), end=stop.isoformat(), limit=1000, source="vci"),
+                operation_name="adjustment_validation", source="vci", symbol=history.symbol)
+            if (frame.attrs.get("source") != "vci" or frame.attrs.get("symbol") != history.symbol
+                    or any(value for key, value in frame.attrs.items()
+                        if key.startswith("tier_cap_") or key == "request_cap_rows")):
+                raise DataError("ADJUSTMENT_REFERENCE_CONTRACT")
+            frames.append(frame)
+            start = stop + timedelta(days=1)
+        reference = pd.concat(frames, ignore_index=True)
+        reference.attrs = {"source": "vci", "symbol": history.symbol}
+        return verify_adjusted_prices(history, reference)

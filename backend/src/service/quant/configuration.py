@@ -93,6 +93,17 @@ class ConfigProxy:
 
 CFG = ConfigProxy()
 
+
+def analysis_window(frame, config: QuantConfig):
+    """Prototype fetch_ohlcv/fetch_index retain the latest lookback sessions.
+
+    Ingestion and training keep their full immutable history. Only analysis
+    inputs are bounded here, consistently for reference and customer execution.
+    """
+    if config.LOOKBACK_DAYS < config.MIN_HISTORY:
+        raise ValueError("Analysis lookback is shorter than required history")
+    return frame.tail(config.LOOKBACK_DAYS).copy()
+
 @contextmanager
 def engine_context(config: QuantConfig):
     if config.PRICE_INPUT_UNIT != "VND" or config.ENABLE_INTERNAL_STOP_OPTIMIZATION:

@@ -1,0 +1,11 @@
+.git
+.env*
+runtime
+**/__pycache__
+**/*.pyc
+**/*.egg-info
+**/*.pem
+**/*.key
+.venv
+docs
+backend/tests

@@ -6,10 +6,11 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select, update
 
 from service.market_data import DataError, DailyHistory, checksum
+from service.screening_validation import eligible
 from service.models import DataManifest, HistoryRevision, PublishedScreening, ScreeningResult, ScreeningRun, UniverseVersion, new_id
 
 VN = ZoneInfo("Asia/Ho_Chi_Minh")
-POLICY = {"version": "screening-tristate-1", "minimum_history_coverage": .95,
+POLICY = {"version": "screening-tristate-2",
     "minimum_average_volume_shares": 100000, "top_n": 70,
     "AM": {"trigger": "11:30", "deadline": "12:55", "observation_end": "13:00"},
     "PM": {"trigger": "15:00", "deadline": "17:30", "completed_from": "16:00"}}
@@ -37,13 +38,14 @@ def validate_history(history, target, mode, slot, now, allow_fixture):
         raise DataError("AM_CUTOFF_MISMATCH", True)
     if slot == "PM" and (local.date() < target or (local.date() == target and local.time() < day_time(16))):
         raise DataError("PM_DATA_NOT_COMPLETED", True)
-    if not allow_fixture and metadata.get("provenance") != "LIVE_VALIDATED":
+    if not allow_fixture and not eligible(history.payload):
         raise DataError("LIVE_DATA_NOT_VALIDATED", True)
     return DailyHistory(history.symbol, target, mode, history.payload).frame()
 
 
 def run_screening(sessions, target_session, slot: str, *, manifest_id: str | None = None,
-                  now: datetime | None = None, allow_fixture: bool = False, operation_guard=None) -> ScreeningRun:
+                  now: datetime | None = None, allow_fixture: bool = False, operation_guard=None,
+                  backfill: bool = False) -> ScreeningRun:
     if slot not in {"AM", "PM"}:
         raise DataError("INVALID_SCREENING_SLOT")
     now = now or datetime.now(timezone.utc)
@@ -55,8 +57,12 @@ def run_screening(sessions, target_session, slot: str, *, manifest_id: str | Non
     mode = "PROVISIONAL_DAILY" if slot == "AM" else "COMPLETED_DAILY"
     token = new_id()
     with sessions() as db, db.begin():
-        if operation_guard:
-            operation_guard(db)
+        task = operation_guard(db) if operation_guard else None
+        if backfill:
+            if (task is None or task.kind != "BACKFILL" or task.target_session != target_session
+                    or slot != "PM" or now < datetime.combine(target_session, day_time(16), VN)):
+                raise DataError("INVALID_BACKFILL_OPERATION")
+            deadline = datetime.fromtimestamp(task.deadline, timezone.utc)
         db.execute(insert_for(db)(ScreeningRun).values(id=new_id(), target_session=target_session, slot=slot,
             status="WAITING_DATA", policy=POLICY, created_at=int(now.timestamp()), lease_until=0)
             .on_conflict_do_nothing(index_elements=["target_session", "slot"]))
@@ -74,6 +80,7 @@ def run_screening(sessions, target_session, slot: str, *, manifest_id: str | Non
             run.status, run.reason = "FAILED", "SCREENING_DEADLINE"
             return run
         run.status, run.reason = "RUNNING", None
+        run.policy = POLICY
         run.execution_token, run.lease_until = token, int(time.time()) + 600
     try:
         with sessions() as db:
@@ -87,7 +94,7 @@ def run_screening(sessions, target_session, slot: str, *, manifest_id: str | Non
             universe = db.get(UniverseVersion, manifest.universe_id)
             if not universe:
                 raise DataError("UNIVERSE_NOT_READY", True)
-            if not allow_fixture and universe.payload.get("provenance") != "LIVE_VALIDATED":
+            if not allow_fixture and not eligible(universe.payload, universe=True):
                 raise DataError("UNIVERSE_NOT_VALIDATED", True)
             members = universe.payload["members"]
             index_record = db.get(HistoryRevision, manifest.histories.get("VNINDEX", ""))
@@ -97,6 +104,7 @@ def run_screening(sessions, target_session, slot: str, *, manifest_id: str | Non
             selected_manifest_id = manifest.id
             history_ids = manifest.histories.copy()
             source_is_live = universe.payload.get("provenance") == "LIVE_VALIDATED" and index_record.payload["metadata"].get("provenance") == "LIVE_VALIDATED"
+            screening_live = eligible(universe.payload, universe=True) and eligible(index_record.payload)
         from service.quant.screening import evaluate_symbol, market_context, rank_results
         from service.quant.screening_legacy import RegimeAdjustment
         context = market_context(index, mode)
@@ -117,12 +125,14 @@ def run_screening(sessions, target_session, slot: str, *, manifest_id: str | Non
                     ready_count += 1
                     observed_at = history.payload["metadata"]["observed_at"]
                     source_is_live = source_is_live and history.payload["metadata"].get("provenance") == "LIVE_VALIDATED"
+                    screening_live = screening_live and eligible(history.payload)
                 except DataError as exc:
                     unavailable[symbol] = exc.code
                     frame = None
             result = evaluate_symbol(symbol, frame, index, input_mode=mode,
                 minimum_average_volume=POLICY["minimum_average_volume_shares"])
             result["exchange"] = instrument["exchange"]
+            result["warnings"] = sorted(set(result["warnings"] + (history.payload["metadata"].get("warnings", []) if frame is not None else [])))
             result["volume_context"]["observed_at"] = observed_at
             if symbol in unavailable:
                 result["rejection_reasons"].append(unavailable[symbol])
@@ -132,18 +142,18 @@ def run_screening(sessions, target_session, slot: str, *, manifest_id: str | Non
                     *scores, context["screening_adjustments"])
             results.append(result)
         coverage = ready_count / len(members) if members else 0
-        if coverage < POLICY["minimum_history_coverage"]:
-            raise DataError("SCREENING_COVERAGE_NOT_READY", True)
         rankings = rank_results(results, POLICY["top_n"])
         if not any(rankings[group] for group in ["STRONG", "ACCUMULATION", "DISTRIBUTION"]):
             raise DataError("SCREENING_ZERO_ELIGIBLE")
         if now + timedelta(seconds=time.monotonic()-started) >= deadline:
             raise DataError("SCREENING_DEADLINE")
         summary = {"manifest_id": selected_manifest_id, "input_mode": mode, "market_context": context,
+            "execution_mode": "BACKFILL" if backfill else "SCHEDULED",
             "history_coverage_ratio": coverage, "expected_symbols": len(members), "ready_symbols": ready_count,
             "unavailable": unavailable, "top_symbols": rankings["TOP"],
             "ranking_counts": {group: len(values) for group, values in rankings.items()},
-            "source_mode": "LIVE_VALIDATED" if source_is_live else "FIXTURE"}
+            "source_mode": "LIVE_VALIDATED" if source_is_live else "LIVE_SCREENING_VALIDATED" if screening_live else "FIXTURE",
+            "validation_scope": "SCREENING_ONLY" if screening_live and not source_is_live else "FULL" if source_is_live else "FIXTURE"}
         maps = {group: {symbol: i+1 for i, symbol in enumerate(order)} for group, order in rankings.items() if group != "TOP"}
         with sessions() as db, db.begin():
             if operation_guard:

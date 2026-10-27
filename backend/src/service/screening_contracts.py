@@ -1,43 +1,66 @@
+"""Customer views; internal formulas and provenance stay private."""
 from typing import Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
-class CriterionRecord(BaseModel):
-    state: Literal["TRUE", "FALSE", "UNAVAILABLE"]
-    reason_codes: list[str]
-    minimum_bars: int
-    detail: str
-    input_fields: list[str]
-
-
-class ScreeningGroup(BaseModel):
-    criteria: dict[str, CriterionRecord]
-    true_count: int
-    false_count: int
-    unavailable_count: int
-    coverage_ratio: float
-    score: float
-    ranking_eligible: bool
+class ScreeningScore(BaseModel):
+    score: float | None = None
+    met_count: int = 0
+    total_count: int = 7
+    unavailable_count: int = 0
 
 
 class ScreeningItem(BaseModel):
     symbol: str
-    groups: dict[str, ScreeningGroup]
-    assessment: dict
-    price_summary: dict
-    overall_score: float
-    ranking_eligible: bool
-    rejection_reasons: list[str]
-    volume_context: dict
-    policy_version: str
-    warnings: list[str]
-    units: dict[str, str]
     exchange: str | None = None
-    ranks: dict[str, int | None] = Field(default_factory=dict)
+    price_vnd: float | None = None
+    change_ratio: float | None = None
+    change_5d_ratio: float | None = None
+    change_20d_ratio: float | None = None
+    volume_shares: float | None = None
+    average_volume_20_shares: float | None = None
+    volume_ratio_20: float | None = None
+    price_to_high20_ratio: float | None = None
+    groups: dict[Literal["STRONG", "ACCUMULATION", "DISTRIBUTION"], ScreeningScore]
+    eligible: bool
+    status: Literal["ELIGIBLE", "INSUFFICIENT_DATA", "LOW_LIQUIDITY"]
 
 
 class ScreeningPage(BaseModel):
     run_id: str
-    group: str
+    group: Literal["OVERALL", "DISTRIBUTION"]
     items: list[ScreeningItem]
-    next_cursor: str | None
+
+
+class ScreeningAssessment(BaseModel):
+    overall_signal: str | None = None
+    adjusted_signal: str | None = None
+    money_flow: str | None = None
+    trend: str | None = None
+    strength: str | None = None
+    investor_note: str | None = None
+    broker_note: str | None = None
+
+
+class ScreeningMarket(BaseModel):
+    last_close: float | None = None
+    regime_label: str | None = None
+    combined_score: float | None = None
+    risk_label: str | None = None
+    change_5d_ratio: float | None = None
+    change_20d_ratio: float | None = None
+    above_ma20: bool | None = None
+    atr_pct: float | None = None
+    investor_strategy: str | None = None
+    broker_strategy: str | None = None
+
+
+class ScreeningDetail(BaseModel):
+    run_id: str
+    target_session: str
+    published_at: int
+    input_mode: str
+    observed_at: str | None = None
+    item: ScreeningItem
+    assessment: ScreeningAssessment
+    market: ScreeningMarket

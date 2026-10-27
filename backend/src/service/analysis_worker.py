@@ -11,7 +11,7 @@ from service import jobs
 from service.market_data import DataError, DailyHistory, checksum
 from service.canonical_json import semantic_checksum
 from service.models import Account, DataManifest, DependencyRequest, DependencyWaiter, HistoryRevision, Inbox, Job, JobAttempt, MarketSnapshot, ModelVersion, Outbox, PublishedSnapshot
-from service.quant.configuration import QuantConfig
+from service.quant.configuration import QuantConfig, analysis_window
 from service.settings import Settings
 from service.quant.versions import ENGINE_VERSION, SNAPSHOT_POLICY
 from service.delivery import Envelope, PoisonMessage
@@ -79,7 +79,8 @@ def resolve_inputs(db, job: Job, settings: Settings) -> dict:
         raise DataError("HISTORY_MISMATCH")
     if checksum(history.payload) != history.checksum:
         raise DataError("HISTORY_CHECKSUM_MISMATCH")
-    if not settings.allow_fixture_analysis and history.payload["metadata"].get("provenance") != "LIVE_VALIDATED":
+    from service.quant_data_validation import history_accepted
+    if not settings.allow_fixture_analysis and not history_accepted(history.payload):
         raise DataError("LIVE_DATA_NOT_VALIDATED", True)
     warnings = list(row.warnings or []) + history.payload["metadata"].get("warnings", [])
     evaluated_at = job.evaluated_at or int(time.time())
@@ -187,10 +188,12 @@ class AnalysisWorker:
                         raise
                     jobs.begin_compute(db, job.id, token, inputs["versions"])
                     current.evaluated_at = inputs["evaluated_at"]
-                final = finalize_member(inputs["member"], inputs["history"].frame(), inputs["reference"],
+                final = finalize_member(inputs["member"], analysis_window(inputs["history"].frame(), inputs["config"]), inputs["reference"],
                     inputs["config"], job.inputs.get("sizing") or None)
                 report = assemble_report(final, job_id=job.id, evaluated_at=datetime.fromtimestamp(inputs["evaluated_at"], timezone.utc),
-                    data_as_of=datetime.fromisoformat(inputs["history"].payload["metadata"]["observed_at"]),
+                    data_as_of=datetime.combine(job.target_session, datetime.min.time(), timezone.utc),
+                    target_session=job.target_session,
+                    data_observed_at=datetime.fromisoformat(inputs["history"].payload["metadata"]["observed_at"]).astimezone(timezone.utc),
                     versions=inputs["versions"], config=inputs["config"], warnings=inputs["warnings"])
                 if heartbeat.lost.is_set():
                     raise jobs.JobError("STALE_EXECUTION")
@@ -238,6 +241,8 @@ def wake_waiters(sessions, settings: Settings) -> int:
             except DataError as exc:
                 if not exc.retryable:
                     jobs.fail_waiting(db, job.id, exc.code)
+                else:
+                    job.reason = exc.code
                 continue
             if jobs.wake_data(db, job.id):
                 count += 1

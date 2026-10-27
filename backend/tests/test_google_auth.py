@@ -1,3 +1,4 @@
+from entitlement_fixtures import paid_bucket, analysis_calendar
 import time
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
@@ -14,7 +15,7 @@ from sqlalchemy import select
 from service.api import create_app
 from service.db import make_engine, session_factory
 from service.identity import seed_admin
-from service.models import Account, QuotaBucket
+from service.models import Account, QuotaBucket, Subscription
 from service.settings import Settings
 
 
@@ -41,6 +42,7 @@ def test_google_exchange_browser_binding_and_role_isolation(tmp_path, monkeypatc
         active_nonce = ""
         invalid_nonce = False
         token_calls = 0
+        google_profile = {"name": "Người dùng kiểm thử", "email": "verified@example.test", "email_verified": True}
 
         def token_endpoint(request):
             nonlocal token_calls
@@ -51,6 +53,7 @@ def test_google_exchange_browser_binding_and_role_isolation(tmp_path, monkeypatc
             claims = {"sub": "google-stable-sub", "iss": "https://accounts.google.com",
                 "aud": "test-client", "iat": int(time.time()), "exp": int(time.time()) + 600,
                 "nonce": "wrong-nonce" if invalid_nonce else active_nonce}
+            claims.update(google_profile)
             return httpx.Response(200, json={"id_token": jwt.encode(claims, private.read_bytes(), algorithm="RS256")})
 
         provider.http = httpx.Client(transport=httpx.MockTransport(token_endpoint))
@@ -60,6 +63,7 @@ def test_google_exchange_browser_binding_and_role_isolation(tmp_path, monkeypatc
         params = parse_qs(urlsplit(start["authorization_url"]).query)
         active_nonce = params["nonce"][0]
         assert params["code_challenge_method"] == ["S256"]
+        assert "profile" in params["scope"][0].split()
         state = params["state"][0]
         browser = client.cookies.get("quantik_oauth_browser")
         denied = client.get("/api/v1/auth/google/callback", params={"state": state, "code": "provider-code"},
@@ -82,20 +86,56 @@ def test_google_exchange_browser_binding_and_role_isolation(tmp_path, monkeypatc
         assert client.get("/api/v1/admin/me", headers=headers).status_code == 401
         assert client.get("/health/ready").status_code == 200
         owner_id = client.get("/api/v1/me", headers=headers).json()["id"]
+        profile = client.get("/api/v1/me", headers=headers).json()
+        assert profile["display_name"] == "Người dùng kiểm thử" and profile["email"] == "verified@example.test"
+        assert profile["profile_required"] is True and profile["age"] is None
+        free = client.get("/api/v1/me/entitlements", headers=headers).json()
+        assert free["active"] and free["remaining"] == 5 and free["plan"]["price_vnd"] == 0
+        assert client.post("/api/v1/analyses", json={"symbol": "FPT", "target_session": "2026-10-14"}, headers=headers | {"Idempotency-Key": "incomplete-profile"}).json()["code"] == "PROFILE_REQUIRED"
+        assert client.patch("/api/v1/me/profile", json={"display_name": "  Khách hàng  ", "date_of_birth": "2999-01-01", "phone_number": "0901234567"}, headers=headers).status_code == 422
+        profile = client.patch("/api/v1/me/profile", json={"display_name": "  Khách hàng  ", "date_of_birth": "1995-01-15", "phone_number": "0901234567"}, headers=headers).json()
+        assert profile["display_name"] == "Khách hàng" and profile["phone_number"] == "+84901234567" and profile["age"] >= 30 and not profile["profile_required"]
+        with session_factory(engine)() as db, db.begin():
+            from service.onboarding import grant_signup
+            account = db.get(Account, owner_id)
+            period = grant_signup(db, account)
+            assert period.order_id is None and period.payment_id is None
+            period.valid_until = int(time.time())-1
+        # A legacy/orphan bucket must not grant product access in any environment.
         with session_factory(engine)() as db, db.begin():
             db.add(QuotaBucket(account_id=owner_id, valid_from=int(time.time())-10,
-                valid_until=int(time.time())+1000, quota_total=5, active_limit=2, entitlement_version="fixture"))
+                valid_until=int(time.time())+1000, quota_total=99, active_limit=2, entitlement_version="orphan"))
+        orphan_rights = client.get("/api/v1/me/entitlements", headers=headers).json()
+        assert orphan_rights["active"] is False and orphan_rights["remaining"] == 0
+        denied = client.post("/api/v1/analyses", json={"symbol": "FPT", "target_session": "2026-10-14"},
+            headers=headers | {"Idempotency-Key": "orphan-denied"})
+        assert denied.status_code == 403 and denied.json()["code"] == "NO_ENTITLEMENT"
+        with session_factory(engine)() as db, db.begin():
+            bucket_id = paid_bucket(db, owner_id, valid_from=int(time.time())-10, valid_until=int(time.time())+1000, quota_total=5, active_limit=2).id
+            analysis_calendar(db)
         analysis_body = {"symbol": "FPT", "target_session": "2026-10-14"}
         job_headers = headers | {"Idempotency-Key": "http-fixture-job"}
         result = client.post("/api/v1/analyses", json=analysis_body, headers=job_headers)
-        assert result.status_code == 202
-        job_id = result.json()["id"]
+        assert result.status_code == 503 and result.json()["code"] == "DATA_NOT_READY"
+        with session_factory(engine)() as db, db.begin():
+            assert db.get(QuotaBucket, bucket_id).daily_created == 0
+            from service import jobs
+            from datetime import date
+            job_id = jobs.admit(db, owner_id, "FPT", date(2026, 10, 14), "http-fixture-job").id
         assert client.post("/api/v1/analyses", json=analysis_body, headers=job_headers).json()["id"] == job_id
         assert client.get("/api/v1/analyses", headers=headers).json()["items"][0]["id"] == job_id
         assert client.get("/api/v1/analyses/unknown", headers=headers).status_code == 404
         result = client.post(f"/api/v1/analyses/{job_id}/cancel", headers=headers)
-        assert result.json()["quota_effect"] == "RELEASED"
-        assert client.get("/api/v1/me/usage", headers=headers).json()["buckets"][0]["reserved"] == 0
+        assert result.status_code == 404
+        buckets = client.get("/api/v1/me/usage", headers=headers).json()["buckets"]
+        assert next(bucket for bucket in buckets if bucket["id"] == bucket_id)["reserved"] == 1
+        with session_factory(engine)() as db, db.begin():
+            period = db.scalar(select(Subscription).where(Subscription.account_id == owner_id, Subscription.grant_key.is_(None)))
+            period.valid_until = int(time.time())-1
+        assert client.get("/api/v1/me/entitlements", headers=headers).json()["active"] is False
+        denied = client.post("/api/v1/analyses", json=analysis_body,
+            headers=headers | {"Idempotency-Key": "expired-subscription-denied"})
+        assert denied.status_code == 403 and denied.json()["code"] == "NO_ENTITLEMENT"
         assert client.post("/api/v1/auth/exchange", json={"code": exchange},
             headers=origin | {"Cookie": f"quantik_oauth_browser={browser}"}).status_code == 401
         assert client.post("/api/v1/auth/refresh", headers=origin).status_code == 200
@@ -107,6 +147,17 @@ def test_google_exchange_browser_binding_and_role_isolation(tmp_path, monkeypatc
         params = parse_qs(urlsplit(client.get("/api/v1/auth/google/start").json()["authorization_url"]).query)
         active_nonce, invalid_nonce = params["nonce"][0], True
         assert client.get("/api/v1/auth/google/callback", params={"state": params["state"][0], "code": "bad-nonce"}).status_code == 401
+        # Same Google sub remains the same account; unverified email is never displayed.
+        invalid_nonce = False
+        google_profile.update(name="Tên mới đã xác minh", email="unverified@example.test", email_verified=False)
+        params = parse_qs(urlsplit(client.get("/api/v1/auth/google/start").json()["authorization_url"]).query)
+        active_nonce = params["nonce"][0]
+        result = client.get("/api/v1/auth/google/callback", params={"state": params["state"][0], "code": "updated-profile"})
+        result = client.post("/api/v1/auth/exchange", json={"code": result.json()["exchange_code"]}, headers=origin)
+        current = client.get("/api/v1/me", headers={"Authorization": "Bearer " + result.json()["access_token"]}).json()
+        assert current["id"] == owner_id and current["display_name"] == "Khách hàng" and current["email"] is None
+        with session_factory(engine)() as db:
+            assert len(list(db.scalars(select(Subscription).where(Subscription.grant_key.is_not(None))))) == 1
     with session_factory(engine)() as db:
         assert len(list(db.scalars(select(Account).where(Account.google_sub.is_not(None))))) == 1
     engine.dispose()

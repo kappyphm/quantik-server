@@ -23,7 +23,7 @@ class GoogleProvider:
     def close(self) -> None:
         self.http.close()
 
-    def verified_identity(self, code: str, verifier: str, nonce: str) -> str:
+    def verified_identity(self, code: str, verifier: str, nonce: str) -> dict:
         try:
             response = self.http.post("https://oauth2.googleapis.com/token", data={
                 "grant_type": "authorization_code", "code": code, "code_verifier": verifier,
@@ -42,7 +42,16 @@ class GoogleProvider:
                 raise AuthError("INVALID_GOOGLE_TOKEN")
             if not isinstance(claims["sub"], str) or not 0 < len(claims["sub"]) <= 255:
                 raise AuthError("INVALID_GOOGLE_TOKEN")
-            return claims["sub"]
+            # Profile comes only from the same signature/nonce-verified ID token.
+            name = claims.get("name")
+            email = claims.get("email")
+            name = name.strip() if isinstance(name, str) else None
+            email = email.strip() if isinstance(email, str) and claims.get("email_verified") is True else None
+            if name and (len(name) > 255 or not name.isprintable()):
+                name = None
+            if email and (len(email) > 320 or not email.isprintable() or "@" not in email):
+                email = None
+            return {"sub": claims["sub"], "display_name": name or None, "email": email or None}
         except (jwt.PyJWTError, httpx.HTTPError, ValueError, KeyError, TypeError):
             # Never expose Google's raw response, authorization code or tokens.
             raise AuthError("GOOGLE_AUTH_FAILED") from None
@@ -57,7 +66,7 @@ def start_flow(db: Session, settings: Settings) -> tuple[str, str]:
         verifier=verifier, expires_at=int(time.time()) + 600))
     db.commit()
     url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode({
-        "client_id": settings.google_client_id, "response_type": "code", "scope": "openid email",
+        "client_id": settings.google_client_id, "response_type": "code", "scope": "openid email profile",
         "redirect_uri": settings.public_origin + "/api/v1/auth/google/callback",
         "state": state, "nonce": nonce, "code_challenge": challenge, "code_challenge_method": "S256"})
     return url, browser
@@ -74,7 +83,8 @@ def callback(db: Session, provider: GoogleProvider, state: str, browser: str, co
         db.rollback()
         raise AuthError("INVALID_OAUTH_STATE")
     db.commit()  # Consume state before external I/O; callbacks are never replayed.
-    sub = provider.verified_identity(code, flow.verifier, flow.nonce)
+    profile = provider.verified_identity(code, flow.verifier, flow.nonce)
+    sub = profile["sub"]
     # Unique Google sub plus upsert handles simultaneous first logins across browsers.
     dialect = db.get_bind().dialect.name
     if dialect == "postgresql":
@@ -82,11 +92,17 @@ def callback(db: Session, provider: GoogleProvider, state: str, browser: str, co
     else:
         from sqlalchemy.dialects.sqlite import insert
     from service.models import new_id
-    db.execute(insert(Account).values(id=new_id(), google_sub=sub, role="user", enabled=True)
-        .on_conflict_do_nothing(index_elements=["google_sub"]))
-    account = db.scalar(select(Account).where(Account.google_sub == sub))
+    created_id = db.scalar(insert(Account).values(id=new_id(), google_sub=sub, role="user", enabled=True, profile_required=True)
+        .on_conflict_do_nothing(index_elements=["google_sub"]).returning(Account.id))
+    account = db.scalar(select(Account).where(Account.google_sub == sub).with_for_update())
     if not account or not account.enabled or account.role != "user":
         raise AuthError()
+    if not account.date_of_birth:
+        account.display_name = profile["display_name"]
+    account.email = profile["email"]
+    if created_id:
+        from service.onboarding import grant_signup
+        grant_signup(db, account)
     exchange = secrets.token_urlsafe(48)
     flow.account_id, flow.exchange_hash = account.id, digest(exchange)
     flow.expires_at, flow.stage = int(time.time()) + 60, "VERIFIED"

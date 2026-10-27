@@ -13,7 +13,7 @@ from service.operational_config import OperationsPolicy, TradingCalendar, active
 from service.settings import Settings
 
 VN = ZoneInfo("Asia/Ho_Chi_Minh")
-KINDS = ("INGEST", "SCREEN", "SNAPSHOT", "TRAIN")
+KINDS = ("INGEST", "SCREEN", "SNAPSHOT", "TRAIN", "BACKFILL")
 
 
 def stamp(day: date, clock: str) -> int:
@@ -29,7 +29,14 @@ def policy_for(db: Session, task: ScheduledTask) -> OperationsPolicy:
 
 def allowed(kind: str, policy: OperationsPolicy, settings: Settings) -> bool:
     return policy.enabled and {"INGEST": policy.ingestion_enabled and settings.scheduled_provider_enabled,
-        "SCREEN": policy.screening_enabled, "SNAPSHOT": policy.snapshots_enabled, "TRAIN": policy.training_enabled}[kind]
+        "SCREEN": policy.screening_enabled, "SNAPSHOT": policy.snapshots_enabled, "TRAIN": policy.training_enabled,
+        "BACKFILL": policy.ingestion_enabled and policy.screening_enabled and settings.scheduled_provider_enabled}[kind]
+
+
+def lane_names(kind: str) -> tuple[str, ...]:
+    # A backfill includes ingestion and screening. Screen workers acquire the
+    # same lanes in this order, so neither path races an ingest worker.
+    return ("INGEST", "SCREEN") if kind in {"SCREEN", "BACKFILL"} else (kind,)
 
 
 def mark_screening_missed(db: Session, task: ScheduledTask, now: int) -> None:
@@ -129,12 +136,15 @@ def claim(sessions: sessionmaker[Session], settings: Settings, kind: str, *, now
         version = active_version(db, "OPERATIONS")
         if not version or not allowed(kind, OperationsPolicy.model_validate(version.payload), settings):
             return None
-        db.execute(insert_for(db)(ScheduledLane).values(kind=kind, lease_until=0)
-            .on_conflict_do_nothing(index_elements=["kind"]))
-        lane = db.scalar(select(ScheduledLane).where(ScheduledLane.kind == kind).with_for_update())
-        if lane.lease_until > now:
+        lanes = []
+        for name in lane_names(kind):
+            db.execute(insert_for(db)(ScheduledLane).values(kind=name, lease_until=0)
+                .on_conflict_do_nothing(index_elements=["kind"]))
+            lanes.append(db.scalar(select(ScheduledLane).where(ScheduledLane.kind == name).with_for_update()))
+        if any(lane.lease_until > now for lane in lanes):
             return None
-        task = db.scalar(select(ScheduledTask).where(ScheduledTask.kind == kind,
+        candidates = ("SCREEN", "BACKFILL") if kind == "SCREEN" and allowed("BACKFILL", OperationsPolicy.model_validate(version.payload), settings) else (kind,)
+        task = db.scalar(select(ScheduledTask).where(ScheduledTask.kind.in_(candidates),
             ScheduledTask.status.in_(["PENDING", "WAITING"]), ScheduledTask.next_attempt_at <= now,
             ScheduledTask.scheduled_at <= now, ScheduledTask.deadline > now)
             .order_by(ScheduledTask.scheduled_at, ScheduledTask.id).limit(1).with_for_update(skip_locked=True))
@@ -148,7 +158,8 @@ def claim(sessions: sessionmaker[Session], settings: Settings, kind: str, *, now
         token = new_id()
         task.status, task.reason, task.execution_token = "RUNNING", None, token
         task.lease_until, task.started_at, task.attempt = now+120, now, task.attempt+1
-        lane.execution_token, lane.lease_until = token, task.lease_until
+        for lane in lanes:
+            lane.execution_token, lane.lease_until = token, task.lease_until
         return task, token
 
 
@@ -161,6 +172,12 @@ def assert_current(db: Session, task_id: str, token: str, settings: Settings, *,
     policy = policy_for(db, task)
     if task.deadline <= now or now-task.started_at >= policy.task_timeout_seconds:
         raise DataError("TASK_EXECUTION_DEADLINE")
+    if task.kind == "BACKFILL":
+        due = db.scalar(select(ScheduledTask.id).where(ScheduledTask.kind.in_(["INGEST", "SCREEN"]),
+            ScheduledTask.status.in_(["PENDING", "WAITING"]), ScheduledTask.scheduled_at <= now,
+            ScheduledTask.next_attempt_at <= now, ScheduledTask.deadline > now).limit(1))
+        if due:
+            raise DataError("BACKFILL_YIELD_TO_SCHEDULE", True, 120)
     active = active_version(db, "OPERATIONS", lock=True)
     if not active or not allowed(task.kind, OperationsPolicy.model_validate(active.payload), settings):
         raise DataError("TASK_OPERATOR_PAUSED", True)
@@ -181,11 +198,16 @@ def heartbeat(sessions: sessionmaker[Session], settings: Settings, task_id: str,
     now = int(time.time())
     with sessions() as db, db.begin():
         # Same lane->task lock order as claim. Finish releases the lane in a second transaction.
-        lane = db.scalar(select(ScheduledLane).where(ScheduledLane.execution_token == token).with_for_update())
-        if not lane or lane.lease_until <= now:
+        lanes = list(db.scalars(select(ScheduledLane).where(ScheduledLane.execution_token == token)
+            .order_by(ScheduledLane.kind).with_for_update()))
+        if not lanes or any(lane.lease_until <= now for lane in lanes):
             raise DataError("TASK_LANE_LOST", True)
         task = assert_current(db, task_id, token, settings, now=now)
-        task.lease_until = lane.lease_until = now+120
+        if tuple(lane.kind for lane in lanes) != lane_names(task.kind):
+            raise DataError("TASK_LANE_LOST", True)
+        task.lease_until = now+120
+        for lane in lanes:
+            lane.lease_until = task.lease_until
 
 
 def finish(sessions: sessionmaker[Session], task_id: str, token: str, *, result: dict | None = None, error: DataError | None = None) -> None:

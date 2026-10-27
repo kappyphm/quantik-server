@@ -1,4 +1,4 @@
-"""Shared full-universe reference snapshots with builder leases and atomic publication."""
+"""Shared prototype-filtered reference snapshots with atomic publication."""
 import time
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -13,9 +13,10 @@ from service.models import ComponentResult, DataManifest, HistoryRevision, Marke
 from service.quant import engines as e
 from service.quant.assembly import directional_context
 from service.quant.baseline import compute_baseline
-from service.quant.configuration import QuantConfig, engine_context
+from service.quant.configuration import QuantConfig, analysis_window, engine_context
 from service.quant.scoring import build_reference
 from service.quant.serialization import json_metrics
+from service.quant.snapshot_selection import POLICY as SELECTION_POLICY, select_candidates
 from service.quant.training import predict_snapshot
 from service.quant.versions import ENGINE_VERSION, SNAPSHOT_POLICY
 
@@ -59,21 +60,28 @@ def cached_baseline(sessions, key: str, compute) -> dict:
         raise
 
 
-def build_market_snapshot(sessions, manifest_id: str, config: QuantConfig, *, minimum_coverage: float = .8, operation_guard=None) -> MarketSnapshot:
-    if not 0 < minimum_coverage <= 1:
+def build_market_snapshot(sessions, manifest_id: str, config: QuantConfig, *, minimum_coverage: float = 0, operation_guard=None) -> MarketSnapshot:
+    if not 0 <= minimum_coverage <= 1:
         raise DataError("INVALID_SNAPSHOT_COVERAGE")
     now = int(time.time())
     evaluation = datetime.fromtimestamp(now, timezone.utc)
     evaluation_day = evaluation.astimezone(ZoneInfo("Asia/Ho_Chi_Minh")).date()
     with sessions() as db:
+        if operation_guard:
+            operation_guard(db)
         manifest = db.get(DataManifest, manifest_id)
         if not manifest:
             raise DataError("MANIFEST_NOT_FOUND")
         data, index, sectors = manifest_frames(db, manifest, config.MIN_HISTORY)
+        selected, screening_excluded = select_candidates(data, index)
+        available_symbols = set(data)
+        data = {symbol: analysis_window(data[symbol], config) for symbol in selected}
+        index = analysis_window(index, config)
         universe = db.get(UniverseVersion, manifest.universe_id)
         members = universe.payload["members"]
-        pointer = db.get(PublishedModel, "weekly-lightgbm")
-        model = db.get(ModelVersion, pointer.model_id) if pointer else None
+        from service.analysis_readiness import model_for_session
+        selected_model = model_for_session(db, manifest.target_session, config, now=now)
+        model = db.get(ModelVersion, selected_model) if selected_model else None
         model_age = (evaluation_day - model.cutoff_session).days if model else None
         if model and (model_age < 0 or model_age >= 28 or model.cutoff_session > manifest.target_session):
             model = None
@@ -82,6 +90,7 @@ def build_market_snapshot(sessions, manifest_id: str, config: QuantConfig, *, mi
         dependency = {"manifest": manifest.id, "model": model_id, "config": asdict(config),
             "engine": ENGINE_VERSION, "policy": SNAPSHOT_POLICY, "evaluation_day": evaluation_day.isoformat(),
             "minimum_coverage": minimum_coverage}
+        dependency["selection_policy"] = SELECTION_POLICY
     key, token = semantic_checksum(dependency), new_id()
     with sessions() as db, db.begin():
         db.execute(_insert(db)(MarketSnapshot).values(id=new_id(), dependency_key=key, manifest_id=manifest_id,
@@ -100,9 +109,12 @@ def build_market_snapshot(sessions, manifest_id: str, config: QuantConfig, *, mi
         if claimed.rowcount != 1:
             raise DataError("SNAPSHOT_BUILD_IN_PROGRESS", True, 30)
     try:
-        baselines, excluded = {}, {s: "HISTORY_OR_SECTOR_UNAVAILABLE" for s in members if s not in data}
+        baselines, excluded = {}, {s: "HISTORY_OR_SECTOR_UNAVAILABLE" for s in members if s not in available_symbols}
+        excluded.update(screening_excluded)
         for symbol, frame in sorted(data.items()):
             with sessions() as db, db.begin():
+                if operation_guard:
+                    operation_guard(db)
                 renewed = db.execute(update(MarketSnapshot).where(MarketSnapshot.id == snapshot_id,
                     MarketSnapshot.execution_token == token, MarketSnapshot.lease_until > int(time.time()))
                     .values(lease_until=int(time.time()) + 600))
@@ -146,6 +158,7 @@ def build_market_snapshot(sessions, manifest_id: str, config: QuantConfig, *, mi
         with engine_context(config):
             reference = build_reference(reports)
         payload = json_metrics({"versions": dependency, "members": reports, "reference": reference,
+            "selection": {"policy": SELECTION_POLICY, "symbols": selected, "limit": 70},
             "excluded": excluded, "coverage_ratio": len(reports) / len(members), "warnings": warnings,
             "model_age_days": model_age, "data_as_of": index.index[-1].date().isoformat()})
         payload["reference_checksum"] = semantic_checksum(payload["reference"])

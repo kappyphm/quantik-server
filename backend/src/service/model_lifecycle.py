@@ -22,6 +22,10 @@ def manifest_frames(db, manifest: DataManifest, minimum_bars: int = 120) -> tupl
             raise DataError("MANIFEST_HISTORY_MISMATCH")
         if checksum(history.payload) != history.checksum:
             raise DataError("HISTORY_CHECKSUM_MISMATCH")
+        if history.payload["metadata"].get("provenance") == "LIVE_UNVERIFIED":
+            from service.quant_data_validation import history_accepted
+            if not history_accepted(history.payload):
+                raise DataError("QUANT_DATA_NOT_VALIDATED")
         frame = DailyHistory(symbol, history.target_session, history.input_mode, history.payload).frame()
         if symbol == "VNINDEX":
             index = frame
@@ -37,10 +41,13 @@ def save_candidate(db, manifest: DataManifest, artifact: dict, config: QuantConf
         raise DataError("MODEL_CUTOFF_MISMATCH")
     histories = [db.get(HistoryRevision, history_id) for history_id in manifest.histories.values()]
     reference = db.get(UniverseVersion, manifest.universe_id)
-    source_verified = bool(reference and reference.payload.get("provenance") == "LIVE_VALIDATED") and all(h and h.payload["metadata"].get("provenance") == "LIVE_VALIDATED"
-        and h.payload["metadata"].get("adjustment") == "VERIFIED" for h in histories)
+    from service.quant_data_validation import POLICY, SCOPE, universe_accepted, history_accepted
+    source_verified = bool(reference and universe_accepted(reference.payload)) and all(
+        h and history_accepted(h.payload) for h in histories)
     evidence = {"live_data_validated": source_verified, "validation_accepted": artifact["validation"]["accepted"],
-        "exclusions": manifest.coverage["excluded"], "manifest_checksum": manifest.checksum}
+        "exclusions": manifest.coverage["excluded"], "manifest_checksum": manifest.checksum,
+        "source_validation_policy": POLICY, "source_validation_scope": SCOPE,
+        "independent_corporate_action_audit": False}
     identity = {"manifest_id": manifest.id, "artifact": artifact, "config": asdict(config), "evidence": evidence}
     return persist_immutable(db, ModelVersion, identity, manifest_id=manifest.id,
         cutoff_session=manifest.target_session, created_at=int(time.time()), published_at=None,

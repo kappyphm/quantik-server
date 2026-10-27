@@ -1,7 +1,9 @@
 from collections.abc import Callable
+from datetime import date
+import time
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Header, Query
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select
 
@@ -24,12 +26,48 @@ class ActivationInput(BaseModel):
     reason: str = Field(min_length=10, max_length=500)
 
 
+class BackfillInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    target_session: date | None = None
+    reason: str = Field(min_length=10, max_length=500)
+
+
 def view(row: RuntimeConfigVersion) -> dict:
     return {"id": row.id, "kind": row.kind, "payload": row.payload, "created_at": row.created_at}
 
 
 def router(settings: Settings, admin: Callable, db_session: Callable) -> APIRouter:
     routes = APIRouter(prefix="/api/v1/admin")
+
+    @routes.get("/screening/backfill-options")
+    def backfill_options(actor=Depends(admin), db=Depends(db_session)):
+        from service.screening_backfill import completed_sessions, task_view
+        from service.scheduling import allowed
+        from service.operational_config import OperationsPolicy
+        _, sessions = completed_sessions(db, settings, int(time.time()))
+        config = active_version(db, "OPERATIONS")
+        latest = db.scalar(select(ScheduledTask).where(ScheduledTask.kind == "BACKFILL")
+            .order_by(ScheduledTask.scheduled_at.desc(), ScheduledTask.id.desc()).limit(1))
+        return {"sessions": list(reversed(sessions[-60:])), "latest_task": task_view(latest) if latest else None,
+            "enabled": bool(config and allowed("BACKFILL", OperationsPolicy.model_validate(config.payload), settings))}
+
+    @routes.post("/screening/backfills", status_code=202)
+    def backfill(body: BackfillInput, idempotency_key: str = Header(min_length=1, max_length=128),
+                 actor=Depends(admin), db=Depends(db_session)):
+        from service.screening_backfill import request_backfill, task_view
+        if len(body.reason.strip()) < 10:
+            raise JobError("BACKFILL_REASON_REQUIRED", 422)
+        task = request_backfill(db, settings, actor.id, body.target_session, body.reason.strip(), idempotency_key)
+        db.commit()
+        return task_view(task)
+
+    @routes.get("/scheduled-tasks/{task_id}")
+    def task_detail(task_id: str, actor=Depends(admin), db=Depends(db_session)):
+        from service.screening_backfill import task_view
+        task = db.get(ScheduledTask, task_id)
+        if not task:
+            raise JobError("TASK_NOT_FOUND", 404)
+        return task_view(task)
 
     @routes.post("/configs/{kind}/versions", status_code=201)
     def create(kind: Kind, body: VersionInput, actor=Depends(admin), db=Depends(db_session)):

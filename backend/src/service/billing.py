@@ -9,12 +9,12 @@ from datetime import datetime
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from service.jobs import JobError
-from service.models import Account, AuditEvent, BankPayment, PlanVersion, PurchaseOrder, QuotaBucket, Subscription
+from service.models import Account, AuditEvent, BankPayment, PlanVersion, PurchaseIntent, PurchaseOrder, QuotaBucket, Subscription
 from service.settings import Settings
 
 
@@ -23,9 +23,17 @@ class PlanInput(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     price_vnd: int = Field(ge=1000, le=100_000_000)
     duration_days: int = Field(ge=1, le=366)
-    analysis_quota: int = Field(ge=1, le=100_000)
+    analysis_quota: int = Field(ge=1, le=100_000, validation_alias=AliasChoices("daily_request_limit", "analysis_quota"))
     active_limit: int = Field(ge=1, le=10)
+    replaces_plan_id: str | None = Field(default=None, min_length=36, max_length=36)
     features: dict[str, bool] = Field(default_factory=lambda: {"screening": True, "analysis": True})
+
+    @field_validator("name")
+    @classmethod
+    def meaningful_name(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Plan name is required")
+        return value.strip()
 
     @field_validator("features")
     @classmethod
@@ -81,8 +89,19 @@ def authenticate_webhook(settings: Settings, authorization: str | None) -> None:
         raise JobError("WEBHOOK_UNAUTHORIZED", 401)
 
 
-def create_plan(db: Session, body: PlanInput, actor_id: str) -> PlanVersion:
-    plan = PlanVersion(**body.model_dump(), available=False, created_at=int(time.time()))
+def create_plan(db: Session, body: PlanInput, actor_id: str, key: str | None = None) -> PlanVersion:
+    db.scalar(select(Account).where(Account.id == actor_id).with_for_update())
+    fingerprint = hashlib.sha256(json.dumps(body.model_dump(), sort_keys=True).encode()).hexdigest()
+    if key:
+        previous = db.scalar(select(PlanVersion).where(PlanVersion.created_by == actor_id, PlanVersion.creation_key == key))
+        if previous:
+            if previous.creation_fingerprint != fingerprint:
+                raise JobError("IDEMPOTENCY_CONFLICT", 409)
+            return previous
+    if body.replaces_plan_id and not db.get(PlanVersion, body.replaces_plan_id):
+        raise JobError("NOT_FOUND", 404)
+    plan = PlanVersion(**body.model_dump(), available=False, created_at=int(time.time()),
+        created_by=actor_id, creation_key=key, creation_fingerprint=fingerprint)
     db.add(plan)
     db.flush()
     audit(db, "billing.plan_created", {"plan_id": plan.id}, actor_id)
@@ -91,14 +110,15 @@ def create_plan(db: Session, body: PlanInput, actor_id: str) -> PlanVersion:
 
 def plan_view(plan: PlanVersion) -> dict:
     return {key: getattr(plan, key) for key in ("id", "name", "price_vnd", "duration_days", "analysis_quota",
-        "active_limit", "features", "available") } | {"currency": "VND", "renewal": "PREPAID_NEXT_PERIOD"}
+        "active_limit", "features", "available", "replaces_plan_id") } | {"currency": "VND", "renewal": "PREPAID_NEXT_PERIOD",
+        "daily_request_limit": plan.analysis_quota, "quota_period": "DAY", "quota_timezone": "Asia/Ho_Chi_Minh"}
 
 
 def order_view(order: PurchaseOrder, now: int | None = None) -> dict:
     now = int(time.time()) if now is None else now
     status = "EXPIRED" if order.status == "PENDING" and now >= order.expires_at else order.status
     result = {key: getattr(order, key) for key in ("id", "plan_id", "amount_vnd", "reference", "created_at", "expires_at", "paid_at")}
-    result.update(status=status, currency="VND", bank=order.bank_code, account_number=order.bank_account,
+    result.update(status=status, server_now=now, currency="VND", bank=order.bank_code, account_number=order.bank_account,
         account_name=order.account_name, transfer_content=order.transfer_content,
         qr_url="https://vietqr.app/img?" + urlencode({"acc": order.bank_account, "bank": order.bank_code,
             "amount": order.amount_vnd, "des": order.transfer_content, "holder": order.account_name, "template": "compact"})
@@ -106,22 +126,58 @@ def order_view(order: PurchaseOrder, now: int | None = None) -> dict:
     return result
 
 
-def create_order(db: Session, account_id: str, plan_id: str, key: str, settings: Settings, now: int | None = None) -> PurchaseOrder:
+def period_view(db: Session, subscription: Subscription) -> dict:
+    plan = db.get(PlanVersion, subscription.plan_id)
+    return {key: getattr(subscription, key) for key in
+        ("id", "order_id", "plan_id", "bucket_id", "valid_from", "valid_until")} | {"plan": plan_view(plan)}
+
+
+def order_detail(db: Session, order: PurchaseOrder, now: int | None = None) -> dict:
+    result = order_view(order, now)
+    payments = list(db.scalars(select(BankPayment).where(BankPayment.order_id == order.id,
+        BankPayment.direction == "in").order_by(BankPayment.received_at.desc(), BankPayment.id.desc())))
+    unresolved = [p for p in payments if p.status == "RECONCILIATION"]
+    subscription = db.scalar(select(Subscription).where(Subscription.order_id == order.id))
+    result.update(plan=plan_view(db.get(PlanVersion, order.plan_id)),
+        subscription=period_view(db, subscription) if subscription else None,
+        payment_resolution="PAID" if order.status == "PAID" else "RECONCILIATION" if unresolved else "UNPAID",
+        payment_summary=[{key: getattr(p, key) for key in
+            ("id", "amount_vnd", "status", "reason", "received_at", "transaction_at")} for p in payments])
+    if unresolved:
+        result["qr_url"] = None
+    latest_end = db.scalar(select(func.max(Subscription.valid_until)).where(Subscription.account_id == order.account_id, Subscription.grant_key.is_(None)))
+    start = subscription.valid_from if subscription else max(result["server_now"], latest_end or 0)
+    result["expected_valid_from"] = start
+    result["expected_valid_until"] = subscription.valid_until if subscription else start + result["plan"]["duration_days"] * 86400
+    return result
+
+
+def create_order(db: Session, account_id: str, plan_id: str, key: str, settings: Settings, now: int | None = None,
+                 *, new_order: bool = False) -> PurchaseOrder:
     now = int(time.time()) if now is None else now
     if not 1 <= len(key) <= 128:
         raise JobError("INVALID_IDEMPOTENCY_KEY", 422)
     account = db.scalar(select(Account).where(Account.id == account_id).with_for_update().execution_options(populate_existing=True))
     if not account or not account.enabled or account.role != "user":
         raise JobError("ACCOUNT_UNAVAILABLE", 403)
-    previous = db.scalar(select(PurchaseOrder).where(PurchaseOrder.account_id == account_id, PurchaseOrder.idempotency_key == key))
+    intent = db.get(PurchaseIntent, (account_id, key))
+    previous = db.get(PurchaseOrder, intent.order_id) if intent else db.scalar(select(PurchaseOrder).where(
+        PurchaseOrder.account_id == account_id, PurchaseOrder.idempotency_key == key))
     if previous:
         if previous.plan_id != plan_id:
             raise JobError("IDEMPOTENCY_CONFLICT", 409)
         return previous
     require_configuration(settings)
     plan = db.scalar(select(PlanVersion).where(PlanVersion.id == plan_id).with_for_update())
-    if not plan or not plan.available:
+    if not plan or not plan.available or plan.price_vnd <= 0:
         raise JobError("PLAN_UNAVAILABLE", 409)
+    if not new_order:
+        pending = db.scalar(select(PurchaseOrder).where(PurchaseOrder.account_id == account_id,
+            PurchaseOrder.plan_id == plan_id, PurchaseOrder.status == "PENDING", PurchaseOrder.expires_at > now)
+            .order_by(PurchaseOrder.created_at.desc(), PurchaseOrder.id.desc()).limit(1))
+        if pending:
+            db.add(PurchaseIntent(account_id=account_id, key=key, order_id=pending.id))
+            return pending
     if db.scalar(select(func.count()).select_from(PurchaseOrder).where(PurchaseOrder.account_id == account_id,
             PurchaseOrder.status == "PENDING", PurchaseOrder.expires_at > now)) >= 5:
         raise JobError("PENDING_ORDER_LIMIT", 429)
@@ -133,6 +189,7 @@ def create_order(db: Session, account_id: str, plan_id: str, key: str, settings:
         created_at=now, expires_at=now+1800, status="PENDING")
     db.add(order)
     db.flush()
+    db.add(PurchaseIntent(account_id=account_id, key=key, order_id=order.id))
     audit(db, "billing.order_created", {"order_id": order.id, "plan_id": plan.id}, account_id)
     return order
 
@@ -162,14 +219,23 @@ def grant(db: Session, payment: BankPayment, order: PurchaseOrder, now: int, act
         return
     plan = db.get(PlanVersion, order.plan_id)
     # Immutable version: future plan withdrawal cannot change an already purchased contract.
-    last_end = db.scalar(select(func.max(Subscription.valid_until)).where(Subscription.account_id == account.id))
+    last_end = db.scalar(select(func.max(Subscription.valid_until)).where(Subscription.account_id == account.id, Subscription.grant_key.is_(None)))
+    for free in db.scalars(select(Subscription).where(Subscription.account_id == account.id,
+            Subscription.grant_key.is_not(None), Subscription.valid_until > now)):
+        free.valid_until = now
     start = max(now, last_end or now)
-    bucket = QuotaBucket(account_id=account.id, valid_from=start, valid_until=start+plan.duration_days*86400,
+    from service.daily_limits import day_bounds, created_today
+    end = start + plan.duration_days * 86400
+    bucket = QuotaBucket(account_id=account.id, valid_from=start, valid_until=min(end, day_bounds(start)[1]),
         quota_total=plan.analysis_quota, active_limit=plan.active_limit, entitlement_version=plan.id)
     db.add(bucket)
     db.flush()
-    db.add(Subscription(account_id=account.id, order_id=order.id, payment_id=payment.id, plan_id=plan.id,
-        bucket_id=bucket.id, valid_from=bucket.valid_from, valid_until=bucket.valid_until))
+    period = Subscription(account_id=account.id, order_id=order.id, payment_id=payment.id, plan_id=plan.id,
+        bucket_id=bucket.id, valid_from=start, valid_until=end)
+    db.add(period)
+    db.flush()
+    bucket.subscription_id = period.id
+    bucket.daily_created = created_today(db, account.id, start)
     payment.status, payment.reason = "APPLIED", None
     order.status, order.paid_at = "PAID", now
     audit(db, "billing.payment_applied", {"order_id": order.id, "payment_id": payment.id, "bucket_id": bucket.id}, actor_id)
@@ -200,6 +266,9 @@ def cancel_order(db: Session, account_id: str, order_id: str) -> PurchaseOrder:
         raise JobError("NOT_FOUND", 404)
     if order.status == "PAID":
         raise JobError("PAID_ORDER_CANNOT_CANCEL", 409)
+    if db.scalar(select(BankPayment.id).where(BankPayment.order_id == order.id,
+            BankPayment.direction == "in").limit(1)):
+        raise JobError("PAYMENT_REVIEW_REQUIRED", 409)
     if order.status != "CANCELLED":
         order.status = "CANCELLED"
         audit(db, "billing.order_cancelled", {"order_id": order.id}, account_id)

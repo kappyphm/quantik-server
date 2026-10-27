@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     integration_encryption_key_path: Path = Path("runtime/integration-encryption.key")
     metrics_token: SecretStr = SecretStr("")
     release_id: str = Field(default="development", pattern=r"^[A-Za-z0-9._-]{1,64}$")
+    trusted_proxy_hosts: list[str] = Field(default_factory=list, max_length=8)
 
     @model_validator(mode="after")
     def production_checks(self) -> "Settings":

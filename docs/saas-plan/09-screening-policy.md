@@ -59,7 +59,9 @@ price_summary pct_change_* giữ legacy ratio, units explicit.
 | PM | 15:00 | COMPLETED_DAILY | Completed gate từ 16:00; publish trước 17:30 |
 
 Run readiness khác criterion coverage: VNINDEX đúng phiên/mode, >=50 bars cho market context;
->=95% universe có histories hợp lệ; ít nhất một group có eligible symbols. Thời gian chờ hữu hạn.
+Có histories hợp lệ cho các mã xử lý được; ít nhất một group có eligible symbols.
+Theo xác nhận mới ngày 18/10/2026, không chặn công bố theo tỷ lệ độ phủ toàn sàn.
+Mã thiếu/lỗi dữ liệu vẫn giữ UNAVAILABLE và bị loại khỏi xếp hạng; độ phủ thực tế lưu trong summary. Thời gian chờ hữu hạn.
 Thiếu input trước deadline giữ WAITING_DATA; hết deadline FAILED. Zero eligible là failure explicit.
 Source default yêu cầu LIVE_VALIDATED universe + histories. Fixtures chỉ chạy khi cho phép rõ và bị chặn
 khỏi API mặc định. Ingest giữ short histories (minimum 1) để screening đánh giá từng criterion;

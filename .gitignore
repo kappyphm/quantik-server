@@ -1,6 +1,7 @@
 .env
 .env.*
 !.env.example
+!deploy/production/.env.production.example
 .venv/
 __pycache__/
 *.py[cod]
@@ -15,3 +16,11 @@ runtime/
 credentials*.json
 *.pem
 *.key
+
+# Deployment output and runtime secrets stay local to each environment.
+/deploy/production/*.sarif
+/deploy/production/smoke-results-*.json
+/deploy/production/operations-health-*.json
+/deploy/production/.env.production
+/deploy/production/secrets/
+/deploy/production/backups/

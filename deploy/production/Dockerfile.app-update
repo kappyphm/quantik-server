@@ -1,0 +1,11 @@
+# For application-only releases using an immutable, previously deployed runtime.
+# Build fails if that runtime cannot satisfy any current declared dependency.
+ARG BACKEND_BASE_IMAGE
+FROM ${BACKEND_BASE_IMAGE}
+USER root
+COPY backend/pyproject.toml /tmp/release-project.toml
+RUN python -c "import tomllib,importlib.metadata as m; from packaging.requirements import Requirement; p=tomllib.load(open('/tmp/release-project.toml','rb'))['project']; deps=p['dependencies']+sum([p['optional-dependencies'][k] for k in ('broker','ops','market','quant')],[]); assert p['scripts']=={'quantik':'service.cli:main'}; assert all(m.version((r:=Requirement(d)).name) in r.specifier for d in deps); print('Runtime dependencies satisfy release requirements')" && rm /tmp/release-project.toml && rm -rf /venv/lib/python3.13/site-packages/service
+COPY backend/src/service /venv/lib/python3.13/site-packages/service
+COPY backend/migrations /app/backend/migrations
+COPY backend/alembic.ini /app/backend/alembic.ini
+USER 10001:10001

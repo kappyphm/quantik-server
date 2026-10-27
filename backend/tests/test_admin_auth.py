@@ -11,7 +11,7 @@ from sqlalchemy import select
 from service.api import create_app
 from service.db import make_engine, session_factory
 from service.identity import seed_admin
-from service.models import Account
+from service.models import Account, LoginThrottle
 from service.settings import Settings
 
 
@@ -68,7 +68,36 @@ def test_admin_lifecycle_and_token_security(tmp_path, monkeypatch):
         assert client.get("/api/v1/admin/me", headers=headers).status_code == 401
         for _ in range(5):
             assert client.post("/api/v1/admin/auth/login", json={"username": "admin", "password": "wrong"}).status_code == 401
-        assert client.post("/api/v1/admin/auth/login", json={"username": "admin", "password": password}).status_code == 429
+        limited = client.post("/api/v1/admin/auth/login", json={"username": "admin", "password": password})
+        assert limited.status_code == 429 and 1 <= int(limited.headers["Retry-After"]) <= 900
+        with sessions() as db, db.begin():
+            for row in db.scalars(select(LoginThrottle)):
+                row.blocked_until = int(time.time())-1
+                row.last_failure_at = int(time.time())-901
+        assert client.post("/api/v1/admin/auth/login", json={"username": "admin", "password": "wrong"}).status_code == 401
+        with sessions() as db, db.begin():
+            for row in db.scalars(select(LoginThrottle)):
+                assert row.failures == 1
+                row.failures, row.last_failure_at = 4, int(time.time())-901
+        assert client.post("/api/v1/admin/auth/login", json={"username": "admin", "password": "wrong"}).status_code == 401
+        with sessions() as db:
+            assert all(row.failures == 1 for row in db.scalars(select(LoginThrottle)))
+        assert client.post("/api/v1/admin/auth/login", json={"username": "admin", "password": password}).status_code == 200
+        assert client.post("/api/v1/admin/auth/logout", headers=origin).status_code == 204
     with sessions() as db:
         assert len(list(db.scalars(select(Account)))) == 1
     engine.dispose()
+
+
+def test_only_trusted_proxy_can_supply_client_address(monkeypatch):
+    from starlette.requests import Request
+    from service.proxy_address import client_address
+    import socket
+    settings = Settings(_env_file=None, trusted_proxy_hosts=["web"])
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *args, **kwargs: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("172.18.0.5", 0))])
+    def request(peer, forwarded):
+        return Request({"type": "http", "client": (peer, 1234), "headers": [(b"x-real-ip", forwarded.encode())]})
+    assert client_address(request("172.18.0.5", "203.0.113.10"), settings) == "203.0.113.10"
+    assert client_address(request("198.51.100.1", "203.0.113.10"), settings) == "198.51.100.1"
+    assert client_address(request("172.18.0.5", "203.0.113.10, 198.51.100.1"), settings) == "172.18.0.5"
+    assert client_address(request("172.18.0.5", "203.0.113.10"), Settings(_env_file=None)) == "172.18.0.5"

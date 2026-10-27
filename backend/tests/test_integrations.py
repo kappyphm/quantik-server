@@ -108,7 +108,7 @@ def test_sepay_hot_configuration_preserves_existing_orders(context):
         plan.available = True
         plan_id = plan.id
     def order(key):
-        response = client.post("/api/v1/orders", json={"plan_id": plan_id}, headers=user | {"Idempotency-Key": key})
+        response = client.post("/api/v1/orders", json={"plan_id": plan_id, "new_order": True}, headers=user | {"Idempotency-Key": key})
         assert response.status_code == 201, response.text
         return response.json()
     first = order("before-bank-change")
@@ -126,7 +126,9 @@ def test_sepay_hot_configuration_preserves_existing_orders(context):
     assert client.get("/api/v1/me/entitlements", headers=user).json()["remaining"] == 10
     # Active payments cannot lose their webhook secret without an explicit simultaneous disable.
     revoke = {"expected_revision": 2, "reason": "Disable receiving payments", "webhook_api_key": None}
-    assert client.patch(path, json=revoke, headers=admin).status_code == 422
+    assert client.patch(path, json=revoke, headers=admin).status_code == 409
+    assert client.patch(path, json=revoke | {"payments_enabled": False}, headers=admin).status_code == 409
+    assert client.post("/api/v1/orders/" + second["id"] + "/cancel", headers=user).status_code == 200
     assert client.patch(path, json=revoke | {"payments_enabled": False}, headers=admin).status_code == 200
     assert not client.get("/api/v1/plans").json()["payments_enabled"]
     assert client.post("/api/v1/orders", json={"plan_id": plan_id}, headers=user | {"Idempotency-Key": "disabled"}).status_code == 503

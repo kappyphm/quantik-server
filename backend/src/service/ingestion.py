@@ -1,13 +1,13 @@
-"""Resumable ingestion; a partial fetch never becomes a ready market manifest."""
+"""Resumable ingestion with immutable manifests and explicit unavailable symbols."""
 from types import SimpleNamespace
 from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from service.db import make_engine, session_factory
 from service.market_data import DataError, checksum, publish_manifest, save_history, save_universe
-from service.models import HistoryRevision
+from service.models import HistoryRevision, UniverseVersion
 from service.settings import Settings
 from service.vnstock_provider import VnstockProvider
 from service.integrations import read as read_integration
@@ -20,10 +20,59 @@ def reusable_history(record, start: date, minimum_bars: int) -> bool:
         return False
     if metadata.get("provenance") not in {"LIVE_UNVERIFIED", "LIVE_VALIDATED"} or checksum(record.payload) != record.checksum:
         return False
+    from service.screening_validation import eligible
+    if not eligible(record.payload):
+        return False
     if record.input_mode == "PROVISIONAL_DAILY":
         observed = datetime.fromisoformat(metadata["observed_at"]).astimezone(ZoneInfo("Asia/Ho_Chi_Minh"))
         return observed.date() == record.target_session and time(11, 30) <= observed.time() < time(13)
     return True
+
+
+def available_histories(db, universe, start: date, target_session: date,
+                        input_mode: str, minimum_bars: int = 1) -> dict:
+    members = universe.payload["members"]
+    histories = {}
+    # Manifest publication needs only IDs/metadata, not every historical bar in RAM.
+    headers = db.execute(select(HistoryRevision.id, HistoryRevision.symbol, HistoryRevision.target_session,
+        HistoryRevision.input_mode, HistoryRevision.payload["metadata"].label("metadata"),
+        func.json_array_length(HistoryRevision.payload["bars"]).label("bar_count"))
+        .where(HistoryRevision.target_session == target_session, HistoryRevision.input_mode == input_mode))
+    for header in headers.mappings():
+        metadata = header["metadata"]
+        if (header["bar_count"] < minimum_bars or not metadata.get("requested_start")
+                or metadata["requested_start"] > start.isoformat()):
+            continue
+        if metadata.get("provenance") == "LIVE_UNVERIFIED":
+            from service.screening_validation import POLICY
+            evidence = metadata.get("screening_validation", {})
+            if evidence.get("policy") != POLICY or evidence.get("scope") != "SCREENING_ONLY":
+                continue
+        elif metadata.get("provenance") != "LIVE_VALIDATED":
+            continue
+        row = SimpleNamespace(id=header["id"], symbol=header["symbol"], target_session=header["target_session"],
+            input_mode=header["input_mode"], payload={"metadata": header["metadata"]})
+        if row.symbol not in members and row.symbol != "VNINDEX":
+            continue
+        previous = histories.get(row.symbol)
+        if previous is None or row.payload["metadata"]["observed_at"] > previous.payload["metadata"]["observed_at"]:
+            histories[row.symbol] = row
+    return histories
+
+
+def publish_cached_manifest(db, start: date, target_session: date):
+    from service.screening_validation import eligible
+    references = db.scalars(select(UniverseVersion)
+        .order_by(UniverseVersion.created_at.desc(), UniverseVersion.id)
+        .execution_options(yield_per=1))
+    universe = next((row for row in references
+        if checksum(row.payload) == row.checksum and eligible(row.payload, universe=True)), None)
+    if universe is None:
+        return None
+    histories = available_histories(db, universe, start, target_session, "COMPLETED_DAILY")
+    if "VNINDEX" not in histories or not (set(histories) & set(universe.payload["members"])):
+        return None
+    return publish_manifest(db, universe, histories, target_session=target_session, input_mode="COMPLETED_DAILY")
 
 
 def ingest_market(settings: Settings, start: date, target_session: date,
@@ -48,11 +97,27 @@ def ingest_market(settings: Settings, start: date, target_session: date,
         guard()
         provider = VnstockProvider(key, sessions)
         guard()
-        payload = provider.universe()
-        with sessions() as db, db.begin():
-            if operation_guard:
-                operation_guard(db)
-            universe = save_universe(db, payload)
+        current_day = datetime.now(ZoneInfo("Asia/Ho_Chi_Minh"))
+        day_start = int(current_day.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+        universe = None
+        if resume:
+            from service.screening_validation import eligible
+            with sessions() as db:
+                candidate = db.scalar(select(UniverseVersion).where(UniverseVersion.created_at >= day_start)
+                    .order_by(UniverseVersion.created_at.desc(), UniverseVersion.id).limit(1))
+                if candidate and checksum(candidate.payload) == candidate.checksum and eligible(candidate.payload, universe=True):
+                    universe = candidate
+        if universe is None:
+            payload = provider.universe()
+            payload["reference_date"] = current_day.date().isoformat()
+            if payload.get("screening_validation"):
+                from service.screening_validation import certify_universe
+                payload = certify_universe(payload)
+            with sessions() as db, db.begin():
+                if operation_guard:
+                    operation_guard(db)
+                universe = save_universe(db, payload)
+        payload = universe.payload
         members = payload["members"]
         if selected_symbols and not set(selected_symbols).issubset(members):
             raise DataError("UNKNOWN_INSTRUMENT")
@@ -61,10 +126,11 @@ def ingest_market(settings: Settings, start: date, target_session: date,
         for symbol in symbols:
             if resume:
                 with sessions() as db:
-                    row = db.scalar(select(HistoryRevision).where(HistoryRevision.symbol == symbol,
+                    rows = db.scalars(select(HistoryRevision).where(HistoryRevision.symbol == symbol,
                         HistoryRevision.target_session == target_session, HistoryRevision.input_mode == input_mode)
-                        .order_by(HistoryRevision.payload["metadata"]["observed_at"].as_string().desc()).limit(1))
-                    if row and reusable_history(row, start, minimum_bars):
+                        .order_by(HistoryRevision.payload["metadata"]["observed_at"].as_string().desc())
+                        .execution_options(yield_per=1))
+                    if any(reusable_history(row, start, minimum_bars) for row in rows):
                         continue
             try:
                 guard()
@@ -76,29 +142,21 @@ def ingest_market(settings: Settings, start: date, target_session: date,
                     record = save_history(db, history)
                 print(f"Ingested {symbol}: {len(history.payload['bars'])} bars, revision {record.id}")
             except DataError as exc:
-                if exc.code.startswith("TASK_"):
+                if exc.code.startswith("TASK_") or exc.code == "BACKFILL_YIELD_TO_SCHEDULE":
                     raise
                 failures[symbol] = exc.code
                 retry_after = max(retry_after or 0, exc.retry_after or 0) or None
                 print(f"Skipped {symbol}: {exc.code}")
-                if exc.retryable or exc.code.startswith("VNSTOCK_AUTH") or exc.code.startswith("VNSTOCK_TIER"):
-                    break  # Resume later; do not hammer the provider on a shared outage/budget.
+                shared_failure = exc.code.startswith(("PROVIDER_", "VNSTOCK_")) and (
+                    exc.retryable or exc.code.startswith(("VNSTOCK_AUTH", "VNSTOCK_TIER")))
+                if symbol == "VNINDEX" or shared_failure:
+                    break  # Index is mandatory; outages/budgets stop the shared source.
+                # A suspended/new symbol lacking today's bar must not starve the
+                # rest of the market. Missing symbols remain explicitly unavailable.
         with sessions() as db, db.begin():
             if operation_guard:
                 operation_guard(db)
-            histories = {}
-            # Manifest publication needs only IDs/metadata, not every historical bar in RAM.
-            headers = db.execute(select(HistoryRevision.id, HistoryRevision.symbol, HistoryRevision.target_session,
-                HistoryRevision.input_mode, HistoryRevision.payload["metadata"].label("metadata"))
-                .where(HistoryRevision.target_session == target_session, HistoryRevision.input_mode == input_mode))
-            for header in headers.mappings():
-                row = SimpleNamespace(id=header["id"], symbol=header["symbol"], target_session=header["target_session"],
-                    input_mode=header["input_mode"], payload={"metadata": header["metadata"]})
-                if row.symbol not in members and row.symbol != "VNINDEX":
-                    continue
-                previous = histories.get(row.symbol)
-                if previous is None or row.payload["metadata"]["observed_at"] > previous.payload["metadata"]["observed_at"]:
-                    histories[row.symbol] = row
+            histories = available_histories(db, universe, start, target_session, input_mode, minimum_bars)
             try:
                 manifest = publish_manifest(db, universe, histories, target_session=target_session,
                     input_mode=input_mode)

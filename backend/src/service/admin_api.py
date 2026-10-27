@@ -1,9 +1,10 @@
+from service.pagination import encode as history_cursor, newest
 """Bounded operational views and role-specific, audited actions."""
 from collections.abc import Callable
 
 from fastapi import APIRouter, Depends, Header, Query
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from service import admin as operations
 from service.models import (Account, AuditEvent, BankPayment, DataManifest, DependencyRequest, Job,
@@ -16,29 +17,25 @@ class CustomerState(BaseModel):
     reason: str = Field(min_length=10, max_length=500)
 
 
-class RefundInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    reason: str = Field(min_length=10, max_length=500)
-    evidence: str = Field(min_length=10, max_length=1000)
-
-
-def refund_view(db, refund: QuotaRefund) -> dict:
-    reservation = db.get(Reservation, refund.reservation_id)
-    bucket = db.get(QuotaBucket, reservation.bucket_id)
-    return {"id": refund.id, "job_id": reservation.job_id, "bucket_id": bucket.id, "units": 1,
-        "created_at": refund.created_at, "bucket_valid_until": bucket.valid_until, "effect": "CREDIT_ORIGINAL_BUCKET"}
-
-
 def router(admin: Callable, db_session: Callable) -> APIRouter:
     routes = APIRouter(prefix="/api/v1/admin")
 
     @routes.get("/users")
-    def users(cursor: str | None = None, limit: int = Query(50, ge=1, le=100), actor=Depends(admin), db=Depends(db_session)):
+    def users(cursor: str | None = None, limit: int = Query(50, ge=1, le=100),
+              q: str | None = Query(None, max_length=120), enabled: bool | None = None,
+              actor=Depends(admin), db=Depends(db_session)):
         query = select(Account).where(Account.role == "user").order_by(Account.id)
+        if q and q.strip():
+            term = q.strip().lower()
+            query = query.where(or_(func.lower(Account.display_name).contains(term, autoescape=True),
+                func.lower(Account.email).contains(term, autoescape=True), Account.id == q.strip()))
+        if enabled is not None:
+            query = query.where(Account.enabled == enabled)
         if cursor:
             query = query.where(Account.id > cursor)
         rows = list(db.scalars(query.limit(limit+1)))
-        return {"items": [{"id": a.id, "enabled": a.enabled} for a in rows[:limit]],
+        from service.onboarding import profile_view
+        return {"items": [profile_view(a) | {"enabled": a.enabled} for a in rows[:limit]],
             "next_cursor": rows[limit-1].id if len(rows)>limit else None}
 
     @routes.post("/users/{account_id}/state")
@@ -52,8 +49,7 @@ def router(admin: Callable, db_session: Callable) -> APIRouter:
     def jobs(cursor: str | None = None, account_id: str | None = None, status: str | None = None,
              limit: int = Query(50, ge=1, le=100), actor=Depends(admin), db=Depends(db_session)):
         query = select(Job).order_by(Job.id)
-        if cursor:
-            query = query.where(Job.id > cursor)
+        query = newest(query, Job, "created_at", cursor)
         if account_id:
             query = query.where(Job.account_id == account_id)
         if status:
@@ -61,52 +57,41 @@ def router(admin: Callable, db_session: Callable) -> APIRouter:
         rows = list(db.scalars(query.limit(limit+1)))
         return {"items": [{k: getattr(j, k) for k in ("id", "account_id", "symbol", "target_session", "status", "reason",
             "created_at", "deadline", "ready_at", "attempt", "compute_started_at")} for j in rows[:limit]],
-            "next_cursor": rows[limit-1].id if len(rows)>limit else None}
-
-    @routes.post("/jobs/{job_id}/quota-refund")
-    def refund(job_id: str, body: RefundInput,
-               idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
-               actor=Depends(admin), db=Depends(db_session)):
-        result = operations.refund_quota(db, job_id, actor.id, idempotency_key, body.reason, body.evidence)
-        db.commit()
-        return refund_view(db, result)
+            "next_cursor": history_cursor(rows[limit-1].created_at, rows[limit-1].id) if len(rows)>limit else None}
 
     @routes.get("/payments")
     def payments(cursor: str | None = None, status: str | None = None, limit: int = Query(50, ge=1, le=100),
                  actor=Depends(admin), db=Depends(db_session)):
         query = select(BankPayment).order_by(BankPayment.id)
-        if cursor:
-            query = query.where(BankPayment.id > cursor)
+        query = newest(query, BankPayment, "received_at", cursor)
         if status:
             query = query.where(BankPayment.status == status)
         rows = list(db.scalars(query.limit(limit+1)))
         return {"items": [{k: getattr(p,k) for k in ("id", "order_id", "amount_vnd", "status", "reason", "received_at")}
-            for p in rows[:limit]], "next_cursor": rows[limit-1].id if len(rows)>limit else None}
+            for p in rows[:limit]], "next_cursor": history_cursor(rows[limit-1].received_at, rows[limit-1].id) if len(rows)>limit else None}
 
     @routes.get("/subscriptions")
     def subscriptions(cursor: str | None = None, account_id: str | None = None,
                       limit: int = Query(50, ge=1, le=100), actor=Depends(admin), db=Depends(db_session)):
         query = select(Subscription).order_by(Subscription.id)
-        if cursor:
-            query = query.where(Subscription.id > cursor)
+        query = newest(query, Subscription, "valid_from", cursor)
         if account_id:
             query = query.where(Subscription.account_id == account_id)
         rows = list(db.scalars(query.limit(limit+1)))
         return {"items": [{k: getattr(s,k) for k in ("id", "account_id", "order_id", "payment_id", "plan_id",
             "bucket_id", "valid_from", "valid_until")} for s in rows[:limit]],
-            "next_cursor": rows[limit-1].id if len(rows)>limit else None}
+            "next_cursor": history_cursor(rows[limit-1].valid_from, rows[limit-1].id) if len(rows)>limit else None}
 
     @routes.get("/audit")
     def audit(cursor: str | None = None, action: str | None = None, limit: int = Query(50, ge=1, le=100),
               actor=Depends(admin), db=Depends(db_session)):
         query = select(AuditEvent).order_by(AuditEvent.id)
-        if cursor:
-            query = query.where(AuditEvent.id > cursor)
+        query = newest(query, AuditEvent, "occurred_at", cursor)
         if action:
             query = query.where(AuditEvent.action == action)
         rows = list(db.scalars(query.limit(limit+1)))
         return {"items": [{k: getattr(e,k) for k in ("id", "actor_id", "action", "occurred_at", "details")} for e in rows[:limit]],
-            "next_cursor": rows[limit-1].id if len(rows)>limit else None}
+            "next_cursor": history_cursor(rows[limit-1].occurred_at, rows[limit-1].id) if len(rows)>limit else None}
 
     @routes.get("/models")
     def models(cursor: str | None = None, limit: int = Query(20, ge=1, le=100), actor=Depends(admin), db=Depends(db_session)):

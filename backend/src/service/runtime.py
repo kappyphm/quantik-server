@@ -48,7 +48,7 @@ def run_service(command, settings, *, once=False, transport="amqp", kind=None, s
                     if count:
                         emit("delivery.local_handled", count=count)
                 elif command == "dependencies":
-                    run_dependency_once(sessions)
+                    run_dependency_once(sessions, settings)
                 elif command == "reconciler":
                     result = reconcile_control_once(sessions, settings)
                     if any(result.values()):

@@ -39,16 +39,8 @@ def completed_manifest(db: Session, target: date, settings: Settings) -> DataMan
         DataManifest.input_mode == "COMPLETED_DAILY").order_by(DataManifest.revision_order.desc()).limit(1))
     if manifest is None:
         raise DataError("COMPLETED_MANIFEST_NOT_READY", True)
-    if settings.allow_fixture_analysis and settings.environment != "production":
-        return manifest
-    reference = db.get(UniverseVersion, manifest.universe_id)
-    if not reference or reference.payload.get("provenance") != "LIVE_VALIDATED":
-        raise DataError("UNIVERSE_NOT_VALIDATED", True)
-    rows = list(db.execute(select(HistoryRevision.id, HistoryRevision.payload["metadata"])
-        .where(HistoryRevision.id.in_(list(manifest.histories.values())))))
-    if len(rows) != len(manifest.histories) or any(metadata.get("provenance") != "LIVE_VALIDATED" or
-            metadata.get("adjustment") != "VERIFIED" for _, metadata in rows):
-        raise DataError("LIVE_COMPLETED_DATA_NOT_VALIDATED", True)
+    from service.analysis_readiness import validate_manifest
+    validate_manifest(db, manifest, settings)
     return manifest
 
 
@@ -59,6 +51,34 @@ def execute(sessions: sessionmaker[Session], settings: Settings, task: Scheduled
     with sessions() as db, db.begin():
         guard(db)
         policy = scheduling.policy_for(db, task)
+    if task.kind == "BACKFILL":
+        from service.models import ScreeningRun
+        from service.ingestion import ingest_market, publish_cached_manifest
+        from service.screening import run_screening
+        with sessions() as db:
+            ready = db.scalar(select(ScreeningRun).where(ScreeningRun.target_session == task.target_session,
+                ScreeningRun.slot == "PM", ScreeningRun.status == "READY"))
+            if ready:
+                return {"screening_run_id": ready.id, "status": "READY", "reused": True}
+        start = task.target_session-timedelta(days=policy.history_calendar_days)
+        with sessions() as db, db.begin():
+            guard(db)
+            cached = publish_cached_manifest(db, start, task.target_session)
+        if cached:
+            run = run_screening(sessions, task.target_session, "PM", manifest_id=cached.id,
+                allow_fixture=settings.allow_fixture_analysis, operation_guard=guard, backfill=True)
+            if run.status == "READY":
+                return {"screening_run_id": run.id, "status": "READY", "manifest_id": cached.id,
+                    "reused_saved_histories": True}
+        result = ingest_market(settings, task.target_session-timedelta(days=policy.history_calendar_days),
+            task.target_session, input_mode="COMPLETED_DAILY", operation_guard=guard, resume=True)
+        if not result["manifest_id"]:
+            raise DataError("INGESTION_MANIFEST_NOT_READY", True, result.get("retry_after"))
+        run = run_screening(sessions, task.target_session, "PM", manifest_id=result["manifest_id"],
+            allow_fixture=settings.allow_fixture_analysis, operation_guard=guard, backfill=True)
+        if run.status != "READY":
+            raise DataError(run.reason or "SCREENING_NOT_READY", run.status == "WAITING_DATA")
+        return {"screening_run_id": run.id, "status": "READY", "manifest_id": result["manifest_id"]}
     if task.kind == "INGEST":
         # Explicit environment switch is independent of admin config, respecting provider pauses.
         if not settings.scheduled_provider_enabled:
@@ -77,16 +97,15 @@ def execute(sessions: sessionmaker[Session], settings: Settings, task: Scheduled
         if run.status != "READY":
             raise DataError(run.reason or "SCREENING_NOT_READY", run.status == "WAITING_DATA")
         return {"screening_run_id": run.id, "status": run.status}
-    with sessions() as db:
-        manifest_id = completed_manifest(db, task.target_session, settings).id
-        if task.kind == "SNAPSHOT":
-            pointer = db.get(PublishedModel, "weekly-lightgbm")
-            model = db.get(ModelVersion, pointer.model_id) if pointer else None
-            if not model or model.status != "PUBLISHED" or not 0 <= (task.target_session-model.cutoff_session).days < 28:
-                raise DataError("PUBLISHED_MODEL_NOT_READY", True)
     from service.quant.configuration import QuantConfig
     from dataclasses import replace
     config = replace(QuantConfig(), PRICE_INPUT_UNIT="VND")
+    with sessions() as db:
+        manifest_id = completed_manifest(db, task.target_session, settings).id
+        if task.kind == "SNAPSHOT":
+            from service.analysis_readiness import model_for_session
+            if not model_for_session(db, task.target_session, config) and not settings.allow_degraded_analysis:
+                raise DataError("PUBLISHED_MODEL_NOT_READY", True)
     if task.kind == "SNAPSHOT":
         from service.snapshots import build_market_snapshot
         snapshot = build_market_snapshot(sessions, manifest_id, config, operation_guard=guard)

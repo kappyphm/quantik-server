@@ -1,3 +1,4 @@
+from entitlement_fixtures import paid_bucket, analysis_calendar
 import service
 import os
 from dataclasses import asdict, replace
@@ -41,8 +42,8 @@ def test_snapshot_reference_cache_report_invariance_and_publication(tmp_path, mo
     frames = {}
     histories = {}
     with sessions() as db, db.begin():
-        universe = save_universe(db, normalize_universe(pd.DataFrame({"symbol": [f"S{i:02}" for i in range(6)],
-            "exchange": ["HOSE"] * 6, "icb_code_lv2": ["sector"] * 6})))
+        universe = save_universe(db, normalize_universe(pd.DataFrame({"symbol": [f"S{i:02}" for i in range(8)],
+            "exchange": ["HOSE"] * 8, "icb_code_lv2": ["sector"] * 8})))
         for i in range(6):
             symbol = f"S{i:02}"
             price = (80+i*10)*np.exp(.001*n+.02*np.sin(n/12+i))
@@ -53,6 +54,9 @@ def test_snapshot_reference_cache_report_invariance_and_publication(tmp_path, mo
             histories[symbol] = save_history(db, history)
             frames[symbol] = history.frame()
         index_raw = raw.copy()
+        histories["S06"] = save_history(db, normalize_history(raw.assign(volume=99999),
+            symbol="S06", kind="EQUITY", source="vci", target_session=days[-1].date(),
+            observed_at=datetime(2026, 10, 15, tzinfo=timezone.utc)))
         index_raw[["open", "high", "low", "close"]] *= 10
         histories["VNINDEX"] = save_history(db, normalize_history(index_raw, symbol="VNINDEX", kind="INDEX",
             source="kbs", target_session=days[-1].date(), observed_at=datetime(2026, 10, 15, tzinfo=timezone.utc)))
@@ -80,6 +84,13 @@ def test_snapshot_reference_cache_report_invariance_and_publication(tmp_path, mo
     monkeypatch.setattr(snapshots, "compute_baseline", baseline_fixture)
     snapshot = snapshots.build_market_snapshot(sessions, manifest_id, config)
     assert snapshot.status == "READY" and len(calls) == 6
+    assert snapshot.payload["coverage_ratio"] == .75
+    assert snapshot.payload["excluded"]["S06"] == "SCREENING_LOW_LIQUIDITY"
+    assert snapshot.payload["excluded"]["S07"] == "HISTORY_OR_SECTOR_UNAVAILABLE"
+    assert set(snapshot.payload["selection"]["symbols"]) == set(frames)
+    from service.analysis_readiness import snapshot_symbols
+    with sessions() as db:
+        assert snapshot_symbols(db, days[-1].date()) == set(frames)
     assert snapshots.build_market_snapshot(sessions, manifest_id, config).id == snapshot.id
     assert len(calls) == 6
     payload = snapshot.payload
@@ -146,11 +157,11 @@ def test_snapshot_reference_cache_report_invariance_and_publication(tmp_path, mo
         db.add(account)
         db.flush()
         account_id = account.id
-        bucket = QuotaBucket(account_id=account_id, valid_from=int(time.time())-10,
-            valid_until=int(time.time())+3600, quota_total=5, active_limit=2, entitlement_version="fixture")
+        bucket = paid_bucket(db, account_id, valid_from=int(time.time())-10, valid_until=int(time.time())+3600, quota_total=5, active_limit=2)
         db.add(bucket)
         db.flush()
         bucket_id = bucket.id
+        analysis_calendar(db)
 
     class ConfirmedTransport:
         fail = True
@@ -184,6 +195,11 @@ def test_snapshot_reference_cache_report_invariance_and_publication(tmp_path, mo
         with sessions() as db, db.begin():
             access, _ = client.app.state.identity.new_session(db, db.get(Account, account_id))
         headers = {"Authorization": "Bearer " + access}
+        choices = client.get("/api/v1/analyses/options?target_session=2026-10-14", headers=headers).json()
+        assert choices["ready"] and choices["symbols"] == sorted(frames)
+        rejected = client.post("/api/v1/analyses", json={"symbol": "S06", "target_session": "2026-10-14"},
+            headers=headers | {"Idempotency-Key": "filtered-out"})
+        assert rejected.status_code == 422 and rejected.json()["code"] == "SYMBOL_SNAPSHOT_INELIGIBLE"
         body = {"symbol": "S00", "target_session": "2026-10-14"}
         first = client.post("/api/v1/analyses", json=body, headers=headers | {"Idempotency-Key": "worker-flow"})
         assert first.status_code == 202
@@ -207,6 +223,9 @@ def test_snapshot_reference_cache_report_invariance_and_publication(tmp_path, mo
         assert status["status"] == "SUCCEEDED" and status["quota_effect"] == "CONSUMED"
         report = client.get("/api/v1/reports/" + status["report_id"], headers=headers)
         assert report.status_code == 200 and len(report.json()["sections"]) == 16
+        assert report.json()["target_session"] == "2026-10-14"
+        assert report.json()["data_as_of"].startswith("2026-10-14")
+        assert report.json()["data_observed_at"].startswith("2026-10-15")
         with sessions() as db:
             assert db.scalar(select(func.count()).select_from(AnalysisReport)) == 1
             assert db.scalar(select(func.count()).select_from(Inbox)) == 1
@@ -230,8 +249,12 @@ def test_snapshot_reference_cache_report_invariance_and_publication(tmp_path, mo
         for symbol in ["S00", "S01"]:
             result = client.post("/api/v1/analyses", json={"symbol": symbol, "target_session": "2026-10-13"},
                 headers=headers | {"Idempotency-Key": "missing-" + symbol})
-            assert result.status_code == 202
-            waiting_ids.append(result.json()["id"])
+            assert result.status_code == 503 and result.json()["code"] == "DATA_NOT_READY"
+            # Exercise jobs admitted before a readiness change independently of
+            # the HTTP admission gate, which now rejects missing inputs.
+            with sessions() as db, db.begin():
+                from service import jobs
+                waiting_ids.append(jobs.admit(db, account_id, symbol, pd.Timestamp("2026-10-13").date(), "missing-"+symbol).id)
         before = len(transport.events)
         dispatch_once(sessions, transport)
         for event in transport.events[before:]:
@@ -240,7 +263,10 @@ def test_snapshot_reference_cache_report_invariance_and_publication(tmp_path, mo
             keys = list(db.scalars(select(DependencyWaiter.dependency_key).where(DependencyWaiter.job_id.in_(waiting_ids))))
             assert len(keys) == 2 and len(set(keys)) == 1
         for pending_id in waiting_ids:
-            assert client.post(f"/api/v1/analyses/{pending_id}/cancel", headers=headers).json()["quota_effect"] == "RELEASED"
+            assert client.post(f"/api/v1/analyses/{pending_id}/cancel", headers=headers).status_code == 404
+            with sessions() as db, db.begin():
+                from service.jobs import fail_waiting
+                fail_waiting(db, pending_id, "FIXTURE_DATA_UNAVAILABLE")
         # Security revocation after compute starts fences completion and releases the reservation.
         last = client.post("/api/v1/analyses", json=body,
             headers=headers | {"Idempotency-Key": "disabled-during-compute"}).json()["id"]

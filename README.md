@@ -2,6 +2,8 @@
 
 Backend SaaS phân tích chứng khoán Việt Nam. Thiết kế tại [docs/saas-plan](docs/saas-plan/README.md).
 
+Bản deploy thử production trên VPS và hướng dẫn Docker: [deploy/production](deploy/production/README.md). Báo cáo nghiệm thu và bảo mật: [2026-10-16](deploy/production/DEPLOYMENT-2026-10-16.md).
+
 ## Chạy local (PowerShell, từ repository root)
 
 ```powershell
@@ -39,6 +41,8 @@ refresh rotation/reuse, logout và rate limiting. Chưa thay bằng chứng Post
 Không có tài nguyên Docker được tạo bởi test này.
 
 ## Google login
+
+Migration `0014` thêm `accounts.display_name` và `accounts.email`; GET `/api/v1/me` trả tên/email từ ID token Google đã xác minh. Flow dùng scope `openid email profile`, chỉ lưu email khi `email_verified=true`; tài khoản cũ cần đăng nhập Google lại để cập nhật. Identity vẫn dựa trên Google sub. Đây là phần bổ sung hồ sơ hiển thị, không thay chính sách quyền/quota/thanh toán.
 
 Trong Google Cloud OAuth client, thêm redirect URI đúng với QUANTIK_PUBLIC_ORIGIN:
 `http://localhost:8000/api/v1/auth/google/callback` cho local; dùng HTTPS domain thật khi deploy.
@@ -156,8 +160,13 @@ python -m pytest backend/tests/test_snapshots.py -q
 
 Snapshot builder cache baseline theo history/index/config/engine/evaluation-day, có lease/fencing cho cả
 component và snapshot. Tính sector context, LightGBM inference/rank và factor reference trên eligible universe;
-không lấy tập mã user đang request. Eligibility cần history đúng phiên, sector và baseline hợp lệ; publish
-yêu cầu ít nhất 5 mã và 80% universe (beta-1), exclusions rõ. Model ≥14 ngày warning, ≥28 ngày unavailable.
+không lấy tập mã user đang request. Trước khi chạy baseline nặng, lọc như prototype: ít nhất 20 phiên,
+AvgVol20 ≥100.000 cp/phiên, xếp Mạnh giảm dần → Tích lũy giảm dần → Phân phối tăng dần,
+lấy tối đa 70 mã (đồng điểm cả ba nhóm thì theo mã). Dữ liệu Quant vẫn cần đủ MIN_HISTORY và sector.
+Mã bị loại có reason trong exclusions; API phân tích chỉ nhận mã thuộc snapshot đã công bố.
+Publish yêu cầu ít nhất 5 baseline hợp lệ và minimum_coverage nếu được chỉ định (mặc định 0,
+tỷ lệ vẫn tính trên toàn universe). Selection policy nằm trong dependency key để build mới không dùng
+lại snapshot chưa lọc. Model ≥14 ngày warning, ≥28 ngày unavailable.
 Snapshot payload checksum, atomic pointer và manifest revision counter ngăn bản cũ ghi đè correction mới.
 
 Customer finalization dùng reference đã pin, tính agreement/cost trước stops và sizing, score không có screener
@@ -214,6 +223,10 @@ revocation sau compute xử lý đúng. Đây chưa phải bằng chứng broker
 
 ## Screening
 
+FE integration, paid read access, screening-only provider evidence and local/Compose workers:
+[17-screening-integration.md](docs/saas-plan/17-screening-integration.md).
+This scope does not certify adjusted history for Quant/model training.
+
 ```powershell
 quantik migrate
 # Chạy khi provider đã được cấp slot/xác minh; AM chỉ lấy observations trong lunch window.
@@ -231,9 +244,11 @@ overall Top 70 và coverage explicit. AM raw volume với prior-completed baseli
 Policy/window/readiness/deadline tại [09-screening-policy.md](docs/saas-plan/09-screening-policy.md).
 
 API user: GET /instruments; GET /screenings/latest?slot=ALL|AM|PM;
-GET /screenings/{run_id}/results?group=ALL|OVERALL|STRONG|ACCUMULATION|DISTRIBUTION&limit=50&cursor=...
-ALL cursor theo symbol; ranking cursor theo rank. OpenAPI có ScreeningPage/ScreeningItem/ScreeningGroup/CriterionRecord.
-Latest trả published run + latest attempt + stale reasons; failed run không thay published pointer.
+GET /screenings/{run_id}/results?group=OVERALL|DISTRIBUTION (tối đa 5 mã/nhóm);
+GET /screenings/{run_id}/symbols/{symbol}.
+Two top-five tables and detail modal: [26-screening-table.md](docs/saas-plan/26-screening-table.md).
+Results chỉ trả hai nhóm top 5; OpenAPI có ScreeningPage/ScreeningItem/ScreeningDetail.
+Latest trả ngày công bố và stale; failed run không thay published pointer.
 Universe và data fixture không được phục vụ qua API mặc định; source validation vẫn chờ live credentials.
 
 Focused checks đạt boolean parity completed inputs với prototype, missing/short/index availability,
@@ -330,3 +345,23 @@ Chưa có admin override thì giữ `.env`; đã lưu thì DB ưu tiên, clear k
 `quantik generate-integration-key` tạo khóa mã hóa một lần tại `runtime/integration-encryption.key`.
 Key local đã tạo; backup riêng và dùng cùng key cho API/ingest/restore. Không ghi đè hoặc regenerate khi restore.
 Chi tiết field names, examples, activation gates và giới hạn: [16-admin-integrations.md](docs/saas-plan/16-admin-integrations.md).
+
+### Admin order lookup
+
+`GET /api/v1/admin/orders` is admin-only and paginated with `limit`/`cursor`. Optional exact filters: `status` (PENDING/PAID/EXPIRED/CANCELLED), `account_id`, `plan_id`, `reference`. EXPIRED includes pending orders whose payment deadline has passed; filtering does not mutate their stored status.
+
+`GET /api/v1/admin/orders/{id}` returns the original order payment instructions, verified customer name/email, immutable purchased plan, linked bank payments and granted subscription period. Customer JWTs cannot read these endpoints. These endpoints do not mark orders paid, cancel purchases, refund money or grant quota. No schema change is required.
+
+## Chính sách gói và vận hành cập nhật 16/10/2026
+
+- Gói có thời hạn theo `duration_days`; `daily_request_limit` là số yêu cầu phân tích được tiếp nhận tối đa mỗi ngày theo Asia/Ho_Chi_Minh, reset00:00. `analysis_quota` chỉ giữ như tên trường tương thích của cùng hạn mức ngày, không còn là tổng lượt cả kỳ.
+- Yêu cầu tạo thành công tính hạn mức, kể cả kết thúc lỗi; retry cùng Idempotency-Key không tính thêm. Không có API hủy phân tích hoặc hoàn lượt. Worker vẫn có thể kết thúc lỗi khi tài khoản bị khóa hoặc không đủ dữ liệu; việc giải phóng reservation nội bộ không mở lại hạn mức tạo trong ngày.
+- Subscription giữ toàn thời hạn gói; quota bucket tách theo ngày và được tạo khi đọc quyền/tiếp nhận yêu cầu. Yêu cầu chưa xong từ ngày trước vẫn tính giới hạn đồng thời toàn tài khoản. Mua tiếp nối sau kỳ đã mua.
+- Ngừng bán chỉ chặn tạo đơn mới; webhook có khóa hợp lệ vẫn được ghi nhận. Webhook đến sau hạn đơn luôn vào đối soát theo quyết định người dùng. Không xóa webhook key khi còn đơn chờ hoặc giao dịch cần xử lý.
+- Đơn trả metadata gói đã mua, kỳ được cấp, dự kiến hiệu lực, server_now và payment_resolution. Trạng thái RECONCILIATION ẩn QR, không có thao tác tự công nhận PAID.
+- Mặc định tạo đơn tiếp tục đơn PENDING còn hạn của cùng gói; mọi request key được gắn bền với kết quả, kể cả khi đơn đó đã PAID ở lần retry. `new_order=true` dùng khi thực sự cần đơn riêng.
+- Tạo gói admin bắt buộc Idempotency-Key. Phiên bản sao chép có replaces_plan_id; mở phiên bản thay thế cần replace_existing=true, đóng bản cũ trong cùng transaction và kiểm tra bản thay thế cạnh tranh.
+- Admin users hỗ trợ q theo tên/email/ID và enabled. Lịch sử orders/payments/subscriptions/jobs/audit dùng cursor theo thời gian+ID mới nhất trước; cursor không còn là ID đơn thuần.
+- Schema0015 là migration thêm cột/bảng, đã thử trên bản sao DB có dữ liệu và kiểm foreign_key_check. Cần migrate trước khi chạy binary mới. Các bảng refund/ledger cũ giữ để đọc lịch sử, API tạo refund đã gỡ.
+
+Kiểm tra: các test billing/jobs/admin/auth/integrations/snapshot liên quan đã chạy trên DBtạm;9test thuộc nhóm đạt sau cập nhật kỳ vọng409 bảo vệ webhook key. Có kiểm reset ngày, idempotency, active limit qua nửa đêm, phiên bản thay thế, đơn cần đối soát và retired endpoints. Không dùng giao dịch ngân hàng thật.

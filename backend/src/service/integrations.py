@@ -81,6 +81,14 @@ def view(db: Session, name: str, settings: Settings) -> dict:
             missing.append("transfer_prefix")
         result["missing_fields"] = missing
         result["configuration_complete"] = not missing
+        from sqlalchemy import func, select
+        from service.models import BankPayment, PurchaseOrder
+        now = int(time.time())
+        result["pending_orders"] = db.scalar(select(func.count()).select_from(PurchaseOrder).where(
+            PurchaseOrder.status == "PENDING", PurchaseOrder.expires_at > now)) or 0
+        result["reconciliation_count"] = db.scalar(select(func.count()).select_from(BankPayment).where(
+            BankPayment.status == "RECONCILIATION")) or 0
+        result["last_payment_received_at"] = db.scalar(select(func.max(BankPayment.received_at)))
     return result
 
 
@@ -94,6 +102,14 @@ def patch(db: Session, name: str, settings: Settings, changes: dict, expected_re
         raise JobError("INTEGRATION_REVISION_CONFLICT", 409)
     if not changes:
         raise JobError("INTEGRATION_CHANGES_REQUIRED", 422)
+    if name == "sepay" and "webhook_api_key" in changes and not changes["webhook_api_key"] and values["webhook_api_key"]:
+        from sqlalchemy import func, select
+        from service.models import BankPayment, PurchaseOrder
+        pending = db.scalar(select(func.count()).select_from(PurchaseOrder).where(
+            PurchaseOrder.status == "PENDING", PurchaseOrder.expires_at > int(time.time())))
+        unresolved = db.scalar(select(func.count()).select_from(BankPayment).where(BankPayment.status == "RECONCILIATION"))
+        if pending or unresolved:
+            raise JobError("WEBHOOK_KEY_IN_USE", 409)
     values.update({field: (value.get_secret_value() if isinstance(value, SecretStr) else value) if value is not None else ""
         for field, value in changes.items()})
     if name == "sepay":
