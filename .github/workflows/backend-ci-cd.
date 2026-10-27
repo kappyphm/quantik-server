@@ -1,0 +1,102 @@
+name: Backend CI/CD
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install './backend[broker,ops,market,quant,dev]' --extra-index-url https://vnstocks.com/api/packages
+      - name: Run backend tests
+        env:
+          QUANTIK_NUMERICAL_THREADS: "1"
+        run: cd backend && python -m pytest tests -q
+
+  deploy:
+    name: Deploy backend to VPS
+    needs: ci
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          set -eu
+          if [ -z "$VPS_HOST" ] || [ -z "$VPS_USER" ] || [ -z "$VPS_SSH_KEY" ]; then
+            echo "Missing VPS_HOST, VPS_USER or VPS_SSH_KEY secret; aborting before touching the VPS."
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/quantik_cd
+          chmod 600 ~/.ssh/quantik_cd
+          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts
+          ssh -i ~/.ssh/quantik_cd -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" 'bash -s' <<'EOS'
+          set -eu
+          cd /opt/quantik
+          rm -rf /tmp/quantik-cd
+          git clone --branch main --depth 1 https://github.com/kappyphm/quantik-server /tmp/quantik-cd
+          SHA="$(git -C /tmp/quantik-cd rev-parse --short HEAD)"
+          RELEASE="cd-$(date -u +%Y%m%dT%H%M%SZ)-$SHA"
+          RELEASE_DIR="/opt/quantik/releases/$RELEASE"
+          mkdir -p "$RELEASE_DIR"
+          cp -p .env.production "$RELEASE_DIR/env.before"
+          docker ps --format '{{.Names}} {{.Image}}' > "$RELEASE_DIR/containers.before"
+          rollback() {
+            echo 'Deploy failed; restoring previous backend image.'
+            cp -p "$RELEASE_DIR/env.before" .env.production
+            docker compose --env-file .env.production up -d --wait --wait-timeout 180 || true
+          }
+          trap rollback EXIT
+          # Verified backup first: abort (and roll back) if this fails.
+          sh /opt/quantik/backup.sh | tee "$RELEASE_DIR/backup.log"
+          # Build the app-update image on the VPS, reusing the running base image.
+          BASE_ID="$(docker inspect --format '{{.Image}}' quantik-api-1)"
+          docker tag "$BASE_ID" quantik-backend-base:cd
+          cd /tmp/quantik-cd
+          docker build -f deploy/production/Dockerfile.app-update --build-arg BACKEND_BASE_IMAGE=quantik-backend-base:cd -t "quantik-backend:$RELEASE" .
+          NEW_IMAGE="$(docker image inspect "quantik-backend:$RELEASE" --format '{{.Id}}')"
+          cd /opt/quantik
+          python3 - "$RELEASE_DIR" "$NEW_IMAGE" "$RELEASE" <<'PY'
+          import json, sys
+          from pathlib import Path
+          release = Path(sys.argv[1])
+          image, release_id = sys.argv[2], sys.argv[3]
+          path = Path('.env.production')
+          lines = path.read_text().splitlines()
+          updates = {'BACKEND_IMAGE': image, 'QUANTIK_RELEASE_ID': release_id}
+          assert all(any(line.startswith(key + '=') for line in lines) for key in updates)
+          path.write_text('\n'.join(key + '=' + updates[key] if (key := line.split('=', 1)[0]) in updates else line for line in lines) + '\n')
+          (release / 'images.json').write_text(json.dumps(updates, indent=2) + '\n')
+          print(json.dumps(updates))
+          PY
+          docker compose --env-file .env.production config --quiet
+          docker compose --env-file .env.production up -d --wait postgres rabbitmq
+          docker compose --env-file .env.production run --rm migrate
+          docker compose --env-file .env.production run --rm migrate quantik seed-operations
+          docker compose --env-file .env.production up -d --wait --wait-timeout 180
+          curl -fsS http://127.0.0.1:8000/health/ready
+          curl -fsS https://quantik.io.vn/health/ready
+          curl -fsS -o /dev/null https://quantik.io.vn/dashboard
+          docker ps --format '{{.Names}} {{.Image}}' > "$RELEASE_DIR/containers.after"
+          trap - EXIT
+          echo "BACKEND_DEPLOY_OK $RELEASE"
+          EOS
