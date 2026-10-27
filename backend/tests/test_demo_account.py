@@ -43,6 +43,8 @@ def test_demo_code_login_bypass_order_block_and_reset(tmp_path, monkeypatch):
     app, engine = _app(tmp_path, monkeypatch)
     origin = {"Origin": "http://testserver"}
     with TestClient(app) as client:
+        ready = client.get("/health/ready").json()
+        assert ready == {"status": "ready", "schema_revision": "0018"}
         admin = client.post("/api/v1/admin/auth/login",
             json={"username": "admin", "password": "admin-password-long-enough"}).json()
         headers = {"Authorization": f"Bearer {admin['access_token']}"}
