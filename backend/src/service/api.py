@@ -34,6 +34,10 @@ class AuthExchange(BaseModel):
     code: str = Field(min_length=20, max_length=128)
 
 
+class DemoExchange(BaseModel):
+    code: str = Field(min_length=1, max_length=128)
+
+
 class Sizing(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     account_size_vnd: float = Field(gt=0)
@@ -208,6 +212,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response.delete_cookie("quantik_oauth_browser", path="/api/v1/auth")
         return audit_result
 
+    @app.post("/api/v1/auth/demo/exchange")
+    def demo_exchange(body: DemoExchange, request: Request, response: Response, db=Depends(db_session)):
+        # No Google flow: a booth machine presents an admin-minted code.
+        # The code itself is never a password for any other account, and
+        # only the demo account can ever be exchanged this way.
+        require_origin(request)
+        from service.demo import ensure_demo_account, find_code
+        from service.billing import audit as billing_audit
+        row = find_code(db, body.code.strip())
+        if not row or row.revoked or (row.expires_at and row.expires_at <= int(time.time())):
+            raise AuthError()
+        account = ensure_demo_account(db)
+        if not account.enabled:
+            raise AuthError()
+        row.used_count += 1
+        row.last_used_at = int(time.time())
+        result = request.app.state.identity.new_session(db, account)
+        billing_audit(db, "demo.code_exchanged", {"demo_code_id": row.id}, account.id)
+        db.commit()
+        return tokens(response, result, "user")
+
     @app.post("/api/v1/auth/refresh")
     def user_refresh(request: Request, response: Response, db=Depends(db_session)):
         require_origin(request)
@@ -261,7 +286,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not existing:
             if account.profile_required:
                 raise jobs.JobError("PROFILE_REQUIRED", 403)
-            if not current_bucket(db, account.id, int(time.time())):
+            from service.demo import is_demo_account
+            if not is_demo_account(account) and not current_bucket(db, account.id, int(time.time())):
                 raise jobs.JobError("NO_ENTITLEMENT", 403)
             try:
                 validate_request(db, settings, body.target_session, body.symbol)

@@ -160,6 +160,8 @@ def create_order(db: Session, account_id: str, plan_id: str, key: str, settings:
     account = db.scalar(select(Account).where(Account.id == account_id).with_for_update().execution_options(populate_existing=True))
     if not account or not account.enabled or account.role != "user":
         raise JobError("ACCOUNT_UNAVAILABLE", 403)
+    if bool(getattr(account, "is_demo", False)):
+        raise JobError("DEMO_ORDER_NOT_ALLOWED", 403)
     intent = db.get(PurchaseIntent, (account_id, key))
     previous = db.get(PurchaseOrder, intent.order_id) if intent else db.scalar(select(PurchaseOrder).where(
         PurchaseOrder.account_id == account_id, PurchaseOrder.idempotency_key == key))

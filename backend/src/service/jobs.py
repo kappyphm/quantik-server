@@ -52,23 +52,34 @@ def admit(db: Session, account_id: str, symbol: str, target_session: date,
             raise JobError("IDEMPOTENCY_CONFLICT")
         return existing
     from service.daily_limits import current_bucket
+    from service.demo import ensure_demo_account, is_demo_account
+    if is_demo_account(account):
+        ensure_demo_account(db)
     bucket = current_bucket(db, account_id, now)
     if not bucket:
         raise JobError("NO_ENTITLEMENT", 403)
-    if bucket.daily_created >= bucket.quota_total:
-        raise JobError("DAILY_REQUEST_LIMIT", 429)
-    active_count = db.scalar(select(func.count()).select_from(Job).where(Job.account_id == account_id,
-        Job.status.not_in(TERMINAL)))
-    if active_count >= bucket.active_limit:
-        raise JobError("ACTIVE_JOB_LIMIT", 429)
-    changed = db.execute(update(QuotaBucket).where(QuotaBucket.id == bucket.id,
-        QuotaBucket.daily_created < QuotaBucket.quota_total,
-        QuotaBucket.consumed + QuotaBucket.reserved < QuotaBucket.quota_total,
-        QuotaBucket.active_jobs < QuotaBucket.active_limit)
-        .values(reserved=QuotaBucket.reserved + 1, active_jobs=QuotaBucket.active_jobs + 1,
-            daily_created=QuotaBucket.daily_created + 1))
-    if changed.rowcount != 1:
-        raise JobError("QUOTA_OR_JOB_LIMIT", 429)
+    if is_demo_account(account):
+        # Demo accounts are never blocked by daily, active-job or quota
+        # limits; the reservation below still tracks the job so worker
+        # settlement can release it.
+        db.execute(update(QuotaBucket).where(QuotaBucket.id == bucket.id)
+            .values(reserved=QuotaBucket.reserved + 1, active_jobs=QuotaBucket.active_jobs + 1,
+                daily_created=QuotaBucket.daily_created + 1))
+    else:
+        if bucket.daily_created >= bucket.quota_total:
+            raise JobError("DAILY_REQUEST_LIMIT", 429)
+        active_count = db.scalar(select(func.count()).select_from(Job).where(Job.account_id == account_id,
+            Job.status.not_in(TERMINAL)))
+        if active_count >= bucket.active_limit:
+            raise JobError("ACTIVE_JOB_LIMIT", 429)
+        changed = db.execute(update(QuotaBucket).where(QuotaBucket.id == bucket.id,
+            QuotaBucket.daily_created < QuotaBucket.quota_total,
+            QuotaBucket.consumed + QuotaBucket.reserved < QuotaBucket.quota_total,
+            QuotaBucket.active_jobs < QuotaBucket.active_limit)
+            .values(reserved=QuotaBucket.reserved + 1, active_jobs=QuotaBucket.active_jobs + 1,
+                daily_created=QuotaBucket.daily_created + 1))
+        if changed.rowcount != 1:
+            raise JobError("QUOTA_OR_JOB_LIMIT", 429)
     job = Job(account_id=account_id, bucket_id=bucket.id, idempotency_key=idempotency_key,
         payload_hash=hashed, symbol=symbol, target_session=target_session, inputs=payload,
         policy=DEFAULT_POLICY.copy(), created_at=now, ready_at=now,
