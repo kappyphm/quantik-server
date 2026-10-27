@@ -17,6 +17,11 @@ class CustomerState(BaseModel):
     reason: str = Field(min_length=10, max_length=500)
 
 
+class DemoCodeInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    expires_in_days: int | None = Field(default=None, ge=1, le=365)
+
+
 def router(admin: Callable, db_session: Callable) -> APIRouter:
     routes = APIRouter(prefix="/api/v1/admin")
 
@@ -103,6 +108,47 @@ def router(admin: Callable, db_session: Callable) -> APIRouter:
         rows = list(db.execute(query.limit(limit+1)).mappings())
         return {"items": [dict(r) for r in rows[:limit]], "next_cursor": rows[limit-1]["id"] if len(rows)>limit else None,
             "published": [{"name": p.name, "model_id": p.model_id} for p in db.scalars(select(PublishedModel))]}
+
+    @routes.post("/demo/codes")
+    def demo_create_code(body: DemoCodeInput, actor=Depends(admin), db=Depends(db_session)):
+        from service.demo import code_view, create_code
+        from service.billing import audit as billing_audit
+        row, code = create_code(db, actor.id, body.expires_in_days)
+        billing_audit(db, "demo.code_created", {"demo_code_id": row.id}, actor.id)
+        db.commit()
+        # Plaintext code is returned exactly once; it is never stored.
+        return {**code_view(row), "code": code}
+
+    @routes.get("/demo/codes")
+    def demo_list_codes(actor=Depends(admin), db=Depends(db_session)):
+        from service.demo import code_view, ensure_demo_account
+        ensure_demo_account(db)
+        from service.models import DemoCode
+        rows = list(db.scalars(select(DemoCode).order_by(DemoCode.created_at.desc()).limit(100)))
+        return {"items": [code_view(r) for r in rows]}
+
+    @routes.post("/demo/codes/{code_id}/revoke")
+    def demo_revoke_code(code_id: str, actor=Depends(admin), db=Depends(db_session)):
+        from service.demo import code_view
+        from service.billing import audit as billing_audit
+        from service.models import DemoCode
+        row = db.get(DemoCode, code_id)
+        if not row:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail="NOT_FOUND")
+        row.revoked = True
+        billing_audit(db, "demo.code_revoked", {"demo_code_id": row.id}, actor.id)
+        db.commit()
+        return code_view(row)
+
+    @routes.post("/demo/reset")
+    def demo_reset(actor=Depends(admin), db=Depends(db_session)):
+        from service.billing import audit as billing_audit
+        from service.demo import reset_demo
+        result = reset_demo(db)
+        billing_audit(db, "demo.reset", result, actor.id)
+        db.commit()
+        return result
 
     @routes.get("/data-health")
     def data_health(actor=Depends(admin), db=Depends(db_session)):

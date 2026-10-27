@@ -6,6 +6,10 @@ from service.jobs import JobError
 
 
 def require_access(db, account_id: str) -> None:
+    from service.models import Account
+    account = db.get(Account, account_id)
+    if account is not None and bool(getattr(account, "is_demo", False)):
+        return
     now = int(time.time())
     plan = db.scalar(select(PlanVersion).join(Subscription, Subscription.plan_id == PlanVersion.id)
         .where(Subscription.account_id == account_id, Subscription.valid_from <= now,

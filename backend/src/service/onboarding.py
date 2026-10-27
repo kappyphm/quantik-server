@@ -115,4 +115,5 @@ def profile_view(account: Account) -> dict:
     age = current.year-birth.year-((current.month, current.day) < (birth.month, birth.day)) if birth else None
     return {"id": account.id, "role": account.role, "display_name": account.display_name,
         "email": account.email, "date_of_birth": birth, "age": age,
-        "phone_number": account.phone_number, "profile_required": account.profile_required}
+        "phone_number": account.phone_number, "profile_required": account.profile_required,
+        "is_demo": bool(getattr(account, "is_demo", False))}

@@ -26,6 +26,25 @@ class Account(Base):
     password_hash: Mapped[str | None] = mapped_column(String(512))
     role: Mapped[str] = mapped_column(String(16))
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_demo: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+
+
+class DemoCode(Base):
+    """Admin-minted booth access code for the shared demo account.
+
+    Only the SHA-256 hash is stored; the plaintext code is shown to the
+    admin once at creation and never stored or returned again.
+    """
+
+    __tablename__ = "demo_codes"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    code_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("accounts.id"))
+    created_at: Mapped[int] = mapped_column(Integer)
+    expires_at: Mapped[int | None] = mapped_column(Integer)
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False)
+    used_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_used_at: Mapped[int | None] = mapped_column(Integer)
 
 
 class RefreshSession(Base):
