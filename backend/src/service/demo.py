@@ -27,7 +27,12 @@ DEMO_USERNAME = "demo"
 DEMO_PLAN_ID = "05dfe4bc-755c-4dc2-9891-b3c0e13c8003"
 DEMO_PLAN_QUOTA = 999_999
 DEMO_PLAN_ACTIVE_LIMIT = 100
-DEMO_PLAN_YEARS = 100
+# Subscription timestamps are Postgres INTEGER (32-bit, max 2147483647),
+# so a 100-year subscription overflows. 10 years from any date in the
+# 2020s stays safely inside the range, and the explicit demo bypasses
+# mean the account is unlimited regardless of the subscription end.
+DEMO_PLAN_YEARS = 10
+INT32_MAX = 2_147_483_647
 
 
 def is_demo_account(account) -> bool:
@@ -68,7 +73,8 @@ def ensure_demo_account(db) -> Account:
         db.flush()
         period = Subscription(account_id=account.id, plan_id=plan.id, bucket_id=bucket.id,
                               grant_key="demo:" + account.id, valid_from=now,
-                              valid_until=now + DEMO_PLAN_YEARS * 365 * 86400)
+                              valid_until=min(now + DEMO_PLAN_YEARS * 365 * 86400,
+                                              INT32_MAX - 86400))
         db.add(period)
         db.flush()
         bucket.subscription_id = period.id

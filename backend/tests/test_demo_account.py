@@ -64,6 +64,12 @@ def test_demo_code_login_bypass_order_block_and_reset(tmp_path, monkeypatch):
             headers={**user, **origin, "Idempotency-Key": "demo-order-1"})
         assert order.status_code == 403
         assert order.json()["code"] == "DEMO_ORDER_NOT_ALLOWED"
+        # Demo subscription timestamps must fit Postgres INTEGER columns.
+        with session_factory(engine)() as db, db.begin():
+            account = ensure_demo_account(db)
+            periods = db.scalars(select(Subscription).where(
+                Subscription.account_id == account.id)).all()
+            assert periods and all(p.valid_until <= 2_147_483_647 for p in periods)
         # Screening bypass holds even without a subscription.
         with session_factory(engine)() as db, db.begin():
             account = ensure_demo_account(db)
