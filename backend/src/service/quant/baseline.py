@@ -7,6 +7,7 @@ import pandas as pd
 
 from service.quant.configuration import QuantConfig, engine_context
 from service.quant import engines as e
+from service.quant.research import simulation_summary
 
 
 def compute_baseline(symbol: str, frame: pd.DataFrame, *, exchange: str, evaluated_at: datetime,
@@ -57,6 +58,7 @@ def compute_baseline(symbol: str, frame: pd.DataFrame, *, exchange: str, evaluat
                 report["component_errors"][name] = type(exc).__name__
         report["simulation_risk"] = e.FcastEngine.ensemble(prices, garch_result=report.get("garch"),
             symbol=symbol, vni_regime=regime)
+        report["simulation_risk"]["visual_summary"] = simulation_summary(report["simulation_risk"])
         report["kelly"] = {"disabled": True, "note": "Kelly requires separately calibrated trade outcomes"}
         report["meta_label"] = {"disabled": True, "reason": "PRODUCT_POLICY"}
         return report

@@ -41,6 +41,7 @@ class Report(BaseModel):
     sections: dict[str, Section]
     decision: dict
     commentary: dict
+    research: dict | None = None
     warnings: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")

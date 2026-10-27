@@ -13,6 +13,14 @@ from service.scheduling import VN
 DEFAULT_CONFIG = replace(QuantConfig(), PRICE_INPUT_UNIT="VND")
 
 
+def snapshot_symbols(db, target: date) -> set[str] | None:
+    name = "completed:" + target.isoformat() + ":" + checksum(asdict(DEFAULT_CONFIG))
+    members = db.scalar(select(MarketSnapshot.payload["member_checksums"]).join(PublishedSnapshot,
+        PublishedSnapshot.snapshot_id == MarketSnapshot.id).where(
+            PublishedSnapshot.name == name, MarketSnapshot.status == "READY"))
+    return set(members) if members is not None else None
+
+
 def require_snapshot_service(db, target: date) -> None:
     name = "completed:" + target.isoformat() + ":" + checksum(asdict(DEFAULT_CONFIG))
     ready = db.scalar(select(MarketSnapshot.id).join(PublishedSnapshot, PublishedSnapshot.snapshot_id == MarketSnapshot.id)
@@ -52,6 +60,9 @@ def validate_request(db, settings, target: date, symbol: str) -> None:
         raise DataError("UNKNOWN_INSTRUMENT")
     if symbol not in manifest.histories:
         raise DataError("SYMBOL_DATA_NOT_READY", True)
+    selected = snapshot_symbols(db, target)
+    if selected is not None and symbol not in selected:
+        raise DataError("SYMBOL_SNAPSHOT_INELIGIBLE")
 
 
 def options(db, settings, target: date | None = None) -> dict:
@@ -65,6 +76,9 @@ def options(db, settings, target: date | None = None) -> dict:
         require_snapshot_service(db, selected)
         universe = db.get(UniverseVersion, manifest.universe_id)
         symbols = sorted(set(universe.payload["members"]) & set(manifest.histories))
+        selected_symbols = snapshot_symbols(db, selected)
+        if selected_symbols is not None:
+            symbols = sorted(set(symbols) & selected_symbols)
     except DataError as exc:
         reason = exc.code
     return {"sessions": list(reversed(sessions[-60:])), "selected_session": selected,

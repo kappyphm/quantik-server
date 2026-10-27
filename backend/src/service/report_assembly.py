@@ -4,6 +4,7 @@ from datetime import date, datetime
 from service.quant.commentary import PrototypeCommentary
 from service.quant.configuration import QuantConfig, engine_context
 from service.quant.serialization import json_metrics
+from service.quant.research import build_research
 from service.reports import Report
 
 FIELD_MAPPING = {
@@ -45,5 +46,6 @@ def assemble_report(final: dict, *, job_id: str, evaluated_at: datetime, data_as
         "evaluated_at": evaluated_at, "data_as_of": data_as_of, "input_mode": "COMPLETED_DAILY",
         "target_session": target_session, "data_observed_at": data_observed_at,
         "versions": versions, "sections": sections, "decision": final["action"],
-        "commentary": narrative_metrics, "warnings": sorted(set(warnings))}
+        "commentary": narrative_metrics, "research": json_metrics(build_research(final, config), warnings),
+        "warnings": sorted(set(warnings))}
     return Report.model_validate(result).model_dump(mode="json")

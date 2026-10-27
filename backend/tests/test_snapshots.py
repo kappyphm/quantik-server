@@ -54,6 +54,9 @@ def test_snapshot_reference_cache_report_invariance_and_publication(tmp_path, mo
             histories[symbol] = save_history(db, history)
             frames[symbol] = history.frame()
         index_raw = raw.copy()
+        histories["S06"] = save_history(db, normalize_history(raw.assign(volume=99999),
+            symbol="S06", kind="EQUITY", source="vci", target_session=days[-1].date(),
+            observed_at=datetime(2026, 10, 15, tzinfo=timezone.utc)))
         index_raw[["open", "high", "low", "close"]] *= 10
         histories["VNINDEX"] = save_history(db, normalize_history(index_raw, symbol="VNINDEX", kind="INDEX",
             source="kbs", target_session=days[-1].date(), observed_at=datetime(2026, 10, 15, tzinfo=timezone.utc)))
@@ -82,7 +85,12 @@ def test_snapshot_reference_cache_report_invariance_and_publication(tmp_path, mo
     snapshot = snapshots.build_market_snapshot(sessions, manifest_id, config)
     assert snapshot.status == "READY" and len(calls) == 6
     assert snapshot.payload["coverage_ratio"] == .75
-    assert snapshot.payload["excluded"]["S06"] == "HISTORY_OR_SECTOR_UNAVAILABLE"
+    assert snapshot.payload["excluded"]["S06"] == "SCREENING_LOW_LIQUIDITY"
+    assert snapshot.payload["excluded"]["S07"] == "HISTORY_OR_SECTOR_UNAVAILABLE"
+    assert set(snapshot.payload["selection"]["symbols"]) == set(frames)
+    from service.analysis_readiness import snapshot_symbols
+    with sessions() as db:
+        assert snapshot_symbols(db, days[-1].date()) == set(frames)
     assert snapshots.build_market_snapshot(sessions, manifest_id, config).id == snapshot.id
     assert len(calls) == 6
     payload = snapshot.payload
@@ -187,6 +195,11 @@ def test_snapshot_reference_cache_report_invariance_and_publication(tmp_path, mo
         with sessions() as db, db.begin():
             access, _ = client.app.state.identity.new_session(db, db.get(Account, account_id))
         headers = {"Authorization": "Bearer " + access}
+        choices = client.get("/api/v1/analyses/options?target_session=2026-10-14", headers=headers).json()
+        assert choices["ready"] and choices["symbols"] == sorted(frames)
+        rejected = client.post("/api/v1/analyses", json={"symbol": "S06", "target_session": "2026-10-14"},
+            headers=headers | {"Idempotency-Key": "filtered-out"})
+        assert rejected.status_code == 422 and rejected.json()["code"] == "SYMBOL_SNAPSHOT_INELIGIBLE"
         body = {"symbol": "S00", "target_session": "2026-10-14"}
         first = client.post("/api/v1/analyses", json=body, headers=headers | {"Idempotency-Key": "worker-flow"})
         assert first.status_code == 202

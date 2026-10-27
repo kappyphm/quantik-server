@@ -160,8 +160,13 @@ python -m pytest backend/tests/test_snapshots.py -q
 
 Snapshot builder cache baseline theo history/index/config/engine/evaluation-day, có lease/fencing cho cả
 component và snapshot. Tính sector context, LightGBM inference/rank và factor reference trên eligible universe;
-không lấy tập mã user đang request. Eligibility cần history đúng phiên, sector và baseline hợp lệ; publish
-yêu cầu ít nhất 5 mã và 80% universe (beta-1), exclusions rõ. Model ≥14 ngày warning, ≥28 ngày unavailable.
+không lấy tập mã user đang request. Trước khi chạy baseline nặng, lọc như prototype: ít nhất 20 phiên,
+AvgVol20 ≥100.000 cp/phiên, xếp Mạnh giảm dần → Tích lũy giảm dần → Phân phối tăng dần,
+lấy tối đa 70 mã (đồng điểm cả ba nhóm thì theo mã). Dữ liệu Quant vẫn cần đủ MIN_HISTORY và sector.
+Mã bị loại có reason trong exclusions; API phân tích chỉ nhận mã thuộc snapshot đã công bố.
+Publish yêu cầu ít nhất 5 baseline hợp lệ và minimum_coverage nếu được chỉ định (mặc định 0,
+tỷ lệ vẫn tính trên toàn universe). Selection policy nằm trong dependency key để build mới không dùng
+lại snapshot chưa lọc. Model ≥14 ngày warning, ≥28 ngày unavailable.
 Snapshot payload checksum, atomic pointer và manifest revision counter ngăn bản cũ ghi đè correction mới.
 
 Customer finalization dùng reference đã pin, tính agreement/cost trước stops và sizing, score không có screener

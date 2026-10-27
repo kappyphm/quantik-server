@@ -1,4 +1,4 @@
-"""Shared full-universe reference snapshots with builder leases and atomic publication."""
+"""Shared prototype-filtered reference snapshots with atomic publication."""
 import time
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -16,6 +16,7 @@ from service.quant.baseline import compute_baseline
 from service.quant.configuration import QuantConfig, analysis_window, engine_context
 from service.quant.scoring import build_reference
 from service.quant.serialization import json_metrics
+from service.quant.snapshot_selection import POLICY as SELECTION_POLICY, select_candidates
 from service.quant.training import predict_snapshot
 from service.quant.versions import ENGINE_VERSION, SNAPSHOT_POLICY
 
@@ -72,7 +73,9 @@ def build_market_snapshot(sessions, manifest_id: str, config: QuantConfig, *, mi
         if not manifest:
             raise DataError("MANIFEST_NOT_FOUND")
         data, index, sectors = manifest_frames(db, manifest, config.MIN_HISTORY)
-        data = {symbol: analysis_window(frame, config) for symbol, frame in data.items()}
+        selected, screening_excluded = select_candidates(data, index)
+        available_symbols = set(data)
+        data = {symbol: analysis_window(data[symbol], config) for symbol in selected}
         index = analysis_window(index, config)
         universe = db.get(UniverseVersion, manifest.universe_id)
         members = universe.payload["members"]
@@ -87,6 +90,7 @@ def build_market_snapshot(sessions, manifest_id: str, config: QuantConfig, *, mi
         dependency = {"manifest": manifest.id, "model": model_id, "config": asdict(config),
             "engine": ENGINE_VERSION, "policy": SNAPSHOT_POLICY, "evaluation_day": evaluation_day.isoformat(),
             "minimum_coverage": minimum_coverage}
+        dependency["selection_policy"] = SELECTION_POLICY
     key, token = semantic_checksum(dependency), new_id()
     with sessions() as db, db.begin():
         db.execute(_insert(db)(MarketSnapshot).values(id=new_id(), dependency_key=key, manifest_id=manifest_id,
@@ -105,7 +109,8 @@ def build_market_snapshot(sessions, manifest_id: str, config: QuantConfig, *, mi
         if claimed.rowcount != 1:
             raise DataError("SNAPSHOT_BUILD_IN_PROGRESS", True, 30)
     try:
-        baselines, excluded = {}, {s: "HISTORY_OR_SECTOR_UNAVAILABLE" for s in members if s not in data}
+        baselines, excluded = {}, {s: "HISTORY_OR_SECTOR_UNAVAILABLE" for s in members if s not in available_symbols}
+        excluded.update(screening_excluded)
         for symbol, frame in sorted(data.items()):
             with sessions() as db, db.begin():
                 if operation_guard:
@@ -153,6 +158,7 @@ def build_market_snapshot(sessions, manifest_id: str, config: QuantConfig, *, mi
         with engine_context(config):
             reference = build_reference(reports)
         payload = json_metrics({"versions": dependency, "members": reports, "reference": reference,
+            "selection": {"policy": SELECTION_POLICY, "symbols": selected, "limit": 70},
             "excluded": excluded, "coverage_ratio": len(reports) / len(members), "warnings": warnings,
             "model_age_days": model_age, "data_as_of": index.index[-1].date().isoformat()})
         payload["reference_checksum"] = semantic_checksum(payload["reference"])
