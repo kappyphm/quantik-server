@@ -21,6 +21,7 @@ def item_view(row: ScreeningResult) -> dict:
         "average_volume_20_shares": volume.get("baseline20_volume_shares"),
         "volume_ratio_20": prices.get("vol_ratio_20"), "price_to_high20_ratio": prices.get("pct_of_high20"),
         "groups": groups, "eligible": eligible,
+        "data_session": prices.get("data_session"), "stale_sessions": prices.get("stale_sessions"),
         "status": "INSUFFICIENT_DATA" if incomplete else "ELIGIBLE" if eligible else "LOW_LIQUIDITY"}
 
 

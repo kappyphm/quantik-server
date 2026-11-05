@@ -232,6 +232,61 @@ def test_screening_publication_deadline_all_results_and_api(tmp_path, monkeypatc
     engine.dispose()
 
 
+def test_screening_stale_fallback_within_five_sessions(tmp_path, monkeypatch):
+    url = "sqlite:///" + (tmp_path/"stale.sqlite").as_posix()
+    monkeypatch.setenv("QUANTIK_DATABASE_URL", url)
+    monkeypatch.setenv("QUANTIK_ENVIRONMENT", "test")
+    command.upgrade(Config("backend/alembic.ini"), "head")
+    engine, symbols = make_engine(url), ["AAA", "STALE", "OLD"]
+    sessions = session_factory(engine)
+    with sessions() as db, db.begin():
+        universe = save_universe(db, normalize_universe(pd.DataFrame({"symbol": symbols,
+            "exchange": ["HOSE"]*3})))
+
+    def save_for(db, symbol, day, observed):
+        frame = prices(day, n=80, volume=200000)
+        frame["volume"] = frame.volume.round()
+        history = normalize_history(frame.reset_index(names="time"), symbol=symbol,
+            kind="INDEX" if symbol == "VNINDEX" else "EQUITY", source="kbs" if symbol == "VNINDEX" else "vci",
+            target_session=pd.Timestamp(day).date(), observed_at=observed, input_mode="COMPLETED_DAILY",
+            minimum_bars=1, provenance="FIXTURE")
+        return save_history(db, history)
+
+    target = pd.Timestamp("2026-10-14").date()  # Wednesday.
+    with sessions() as db, db.begin():
+        manifest = publish_manifest(db, universe, {
+            "AAA": save_for(db, "AAA", "2026-10-14", datetime(2026, 10, 14, 16, tzinfo=VN)),
+            "VNINDEX": save_for(db, "VNINDEX", "2026-10-14", datetime(2026, 10, 14, 16, tzinfo=VN))},
+            target_session=target, input_mode="COMPLETED_DAILY")
+        # Standalone earlier revisions, never part of a manifest for the target day:
+        # STALE is 4 sessions old (Thu 2026-10-08), OLD is 7 sessions old (Mon 2026-10-05).
+        save_for(db, "STALE", "2026-10-08", datetime(2026, 10, 8, 16, 30, tzinfo=VN))
+        save_for(db, "OLD", "2026-10-05", datetime(2026, 10, 5, 16, 30, tzinfo=VN))
+    run = run_screening(sessions, target, "PM", manifest_id=manifest.id,
+        now=datetime(2026, 10, 14, 16, 5, tzinfo=VN), allow_fixture=True)
+    assert run.status == "READY", run.reason
+    assert run.summary["ready_symbols"] == 1 and run.summary["history_coverage_ratio"] == 1/3
+    assert run.summary["stale_symbols"] == 1 and run.summary["stale"] == {"STALE": "2026-10-08"}
+    assert run.summary["unavailable"] == {"OLD": "HISTORY_NOT_READY"}
+    assert run.summary["top_symbols"] == ["AAA"]
+    with sessions() as db:
+        stale = db.get(ScreeningResult, (run.id, "STALE")).payload
+        assert stale["price_summary"]["close"] is not None
+        assert stale["price_summary"]["data_session"] == "2026-10-08"
+        assert stale["price_summary"]["stale_sessions"] == 4
+        assert not stale["ranking_eligible"]
+        assert not any(g["ranking_eligible"] for g in stale["groups"].values())
+        assert "STALE_HISTORY" in stale["rejection_reasons"] and "STALE_HISTORY" in stale["warnings"]
+        old = db.get(ScreeningResult, (run.id, "OLD")).payload
+        assert old["price_summary"] == {} and "HISTORY_NOT_READY" in old["rejection_reasons"]
+        exact = db.get(ScreeningResult, (run.id, "AAA")).payload
+        assert "data_session" not in exact["price_summary"] and exact["ranking_eligible"]
+        from service.screening_views import item_view
+        view = item_view(db.get(ScreeningResult, (run.id, "STALE")))
+        assert view["price_vnd"] is not None and view["data_session"] == "2026-10-08" and view["stale_sessions"] == 4
+    engine.dispose()
+
+
 def test_screening_contract_evidence_binds_content_without_promoting_quant():
     from copy import deepcopy
     from service.market_data import DailyHistory
