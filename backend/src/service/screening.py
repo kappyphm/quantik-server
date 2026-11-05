@@ -1,6 +1,6 @@
 """Fenced screening runs, readiness/deadline policy and atomic publication."""
 import time
-from datetime import datetime, time as day_time, timedelta, timezone
+from datetime import date, datetime, time as day_time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select, update
@@ -10,8 +10,8 @@ from service.screening_validation import eligible
 from service.models import DataManifest, HistoryRevision, PublishedScreening, ScreeningResult, ScreeningRun, UniverseVersion, new_id
 
 VN = ZoneInfo("Asia/Ho_Chi_Minh")
-POLICY = {"version": "screening-tristate-2",
-    "minimum_average_volume_shares": 100000, "top_n": 70,
+POLICY = {"version": "screening-tristate-3",
+    "minimum_average_volume_shares": 100000, "top_n": 70, "max_stale_sessions": 5,
     "AM": {"trigger": "11:30", "deadline": "12:55", "observation_end": "13:00"},
     "PM": {"trigger": "15:00", "deadline": "17:30", "completed_from": "16:00"}}
 
@@ -41,6 +41,59 @@ def validate_history(history, target, mode, slot, now, allow_fixture):
     if not allow_fixture and not eligible(history.payload):
         raise DataError("LIVE_DATA_NOT_VALIDATED", True)
     return DailyHistory(history.symbol, target, mode, history.payload).frame()
+
+
+def stale_session_gap(calendar_sessions, data_session, target_session) -> int:
+    """Trading sessions between a history's own session and the run's target session."""
+    if calendar_sessions:
+        return sum(1 for day in calendar_sessions if data_session < day <= target_session)
+    gap, day = 0, data_session
+    while day < target_session:
+        day += timedelta(days=1)
+        if day.weekday() < 5:
+            gap += 1
+    return gap
+
+
+def validate_stale_history(history, mode, now, allow_fixture):
+    """validate_history for a fallback revision: the PM completion rule is judged
+    against the revision's own session instead of the run's target session."""
+    if not history or history.input_mode != mode:
+        raise DataError("HISTORY_NOT_READY", True)
+    if checksum(history.payload) != history.checksum:
+        raise DataError("HISTORY_CHECKSUM_MISMATCH")
+    metadata = history.payload["metadata"]
+    observed = datetime.fromisoformat(metadata["observed_at"])
+    if observed.tzinfo is None or observed > now + timedelta(seconds=5):
+        raise DataError("INVALID_OBSERVATION_TIME")
+    local = observed.astimezone(VN)
+    own = history.target_session
+    if local.date() < own or (local.date() == own and local.time() < day_time(16)):
+        raise DataError("PM_DATA_NOT_COMPLETED", True)
+    if not allow_fixture and not eligible(history.payload):
+        raise DataError("LIVE_DATA_NOT_VALIDATED", True)
+    return DailyHistory(history.symbol, own, mode, history.payload).frame()
+
+
+def find_stale_history(db, symbol, target_session, mode, calendar_sessions, now, allow_fixture):
+    """Most recent earlier history for a symbol, at most POLICY['max_stale_sessions']
+    trading sessions older than the target session; None when nothing qualifies."""
+    rows = db.scalars(select(HistoryRevision).where(HistoryRevision.symbol == symbol,
+        HistoryRevision.input_mode == mode, HistoryRevision.target_session < target_session)
+        .order_by(HistoryRevision.target_session.desc(),
+            HistoryRevision.payload["metadata"]["observed_at"].as_string().desc()).limit(5))
+    for history in rows:
+        gap = stale_session_gap(calendar_sessions, history.target_session, target_session)
+        if gap > POLICY["max_stale_sessions"]:
+            break  # Rows are newest-first; older revisions are staler still.
+        if history.payload["metadata"].get("kind") != "EQUITY":
+            continue
+        try:
+            frame = validate_stale_history(history, mode, now, allow_fixture)
+        except DataError:
+            continue
+        return history, frame, {"data_session": history.target_session, "stale_sessions": gap}
+    return None
 
 
 def run_screening(sessions, target_session, slot: str, *, manifest_id: str | None = None,
@@ -97,6 +150,10 @@ def run_screening(sessions, target_session, slot: str, *, manifest_id: str | Non
             if not allow_fixture and not eligible(universe.payload, universe=True):
                 raise DataError("UNIVERSE_NOT_VALIDATED", True)
             members = universe.payload["members"]
+            from service.operational_config import active_version
+            calendar = active_version(db, "TRADING_CALENDAR")
+            calendar_sessions = (sorted(date.fromisoformat(day) for day in calendar.payload["sessions"])
+                if calendar else None)
             index_record = db.get(HistoryRevision, manifest.histories.get("VNINDEX", ""))
             index = validate_history(index_record, target_session, mode, slot, now, allow_fixture)
             if len(index) < 50 or index_record.payload["metadata"]["kind"] != "INDEX":
@@ -108,9 +165,9 @@ def run_screening(sessions, target_session, slot: str, *, manifest_id: str | Non
         from service.quant.screening import evaluate_symbol, market_context, rank_results
         from service.quant.screening_legacy import RegimeAdjustment
         context = market_context(index, mode)
-        results, unavailable, ready_count = [], {}, 0
+        results, unavailable, stale_map, ready_count = [], {}, {}, 0
         for symbol, instrument in sorted(members.items()):
-            frame, observed_at = None, None
+            frame, observed_at, stale = None, None, None
             with sessions() as db, db.begin():
                 renewed = db.execute(update(ScreeningRun).where(ScreeningRun.id == run_id,
                     ScreeningRun.execution_token == token, ScreeningRun.lease_until > int(time.time()))
@@ -127,8 +184,19 @@ def run_screening(sessions, target_session, slot: str, *, manifest_id: str | Non
                     source_is_live = source_is_live and history.payload["metadata"].get("provenance") == "LIVE_VALIDATED"
                     screening_live = screening_live and eligible(history.payload)
                 except DataError as exc:
-                    unavailable[symbol] = exc.code
-                    frame = None
+                    fallback = None
+                    if exc.code == "HISTORY_NOT_READY" and mode == "COMPLETED_DAILY":
+                        fallback = find_stale_history(db, symbol, target_session, mode,
+                            calendar_sessions, now, allow_fixture)
+                    if fallback is None:
+                        unavailable[symbol] = exc.code
+                        frame = None
+                    else:
+                        history, frame, stale = fallback
+                        stale_map[symbol] = stale
+                        observed_at = history.payload["metadata"]["observed_at"]
+                        source_is_live = source_is_live and history.payload["metadata"].get("provenance") == "LIVE_VALIDATED"
+                        screening_live = screening_live and eligible(history.payload)
             result = evaluate_symbol(symbol, frame, index, input_mode=mode,
                 minimum_average_volume=POLICY["minimum_average_volume_shares"])
             result["exchange"] = instrument["exchange"]
@@ -136,6 +204,15 @@ def run_screening(sessions, target_session, slot: str, *, manifest_id: str | Non
             result["volume_context"]["observed_at"] = observed_at
             if symbol in unavailable:
                 result["rejection_reasons"].append(unavailable[symbol])
+            if stale is not None:
+                if result["price_summary"]:
+                    result["price_summary"]["data_session"] = stale["data_session"].isoformat()
+                    result["price_summary"]["stale_sessions"] = stale["stale_sessions"]
+                result["ranking_eligible"] = False
+                for group in result["groups"].values():
+                    group["ranking_eligible"] = False
+                result["rejection_reasons"].append("STALE_HISTORY")
+                result["warnings"] = sorted(set(result["warnings"] + ["STALE_HISTORY"]))
             if result["assessment"].get("status") == "AVAILABLE":
                 scores = [round(result["groups"][g]["score"], 1) for g in ["STRONG", "ACCUMULATION", "DISTRIBUTION"]]
                 result["assessment"]["adjusted_signal"] = RegimeAdjustment()._apply_regime_adjustment(
@@ -150,7 +227,9 @@ def run_screening(sessions, target_session, slot: str, *, manifest_id: str | Non
         summary = {"manifest_id": selected_manifest_id, "input_mode": mode, "market_context": context,
             "execution_mode": "BACKFILL" if backfill else "SCHEDULED",
             "history_coverage_ratio": coverage, "expected_symbols": len(members), "ready_symbols": ready_count,
-            "unavailable": unavailable, "top_symbols": rankings["TOP"],
+            "unavailable": unavailable, "stale_symbols": len(stale_map),
+            "stale": {symbol: info["data_session"].isoformat() for symbol, info in sorted(stale_map.items())},
+            "top_symbols": rankings["TOP"],
             "ranking_counts": {group: len(values) for group, values in rankings.items()},
             "source_mode": "LIVE_VALIDATED" if source_is_live else "LIVE_SCREENING_VALIDATED" if screening_live else "FIXTURE",
             "validation_scope": "SCREENING_ONLY" if screening_live and not source_is_live else "FULL" if source_is_live else "FIXTURE"}
