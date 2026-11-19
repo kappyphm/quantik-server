@@ -10,7 +10,6 @@ from service.market_data import DataError, checksum, publish_manifest, save_hist
 from service.models import HistoryRevision, UniverseVersion
 from service.settings import Settings
 from service.vnstock_provider import VnstockProvider
-from service.integrations import read as read_integration
 
 
 def reusable_history(record, start: date, minimum_bars: int) -> bool:
@@ -83,19 +82,15 @@ def ingest_market(settings: Settings, start: date, target_session: date,
     engine = make_engine(settings.database_url)
     sessions = session_factory(engine)
     try:
-        with sessions() as db:
-            values, _ = read_integration(db, "vnstock", settings)
-            key = values["api_key"]
-        if not key:
-            raise DataError("PROVIDER_API_KEY_MISSING")
-
         def guard():
             if operation_guard:
                 with sessions() as db, db.begin():
                     operation_guard(db)
 
         guard()
-        provider = VnstockProvider(key, sessions)
+        provider = VnstockProvider(sessions, limits={
+            "per_minute": settings.dnse_limit_per_minute, "per_hour": settings.dnse_limit_per_hour,
+            "per_day": settings.dnse_limit_per_day, "per_month": settings.dnse_limit_per_month})
         guard()
         current_day = datetime.now(ZoneInfo("Asia/Ho_Chi_Minh"))
         day_start = int(current_day.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
