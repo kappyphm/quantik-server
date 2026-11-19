@@ -13,6 +13,7 @@ from service.models import ComponentResult, DataManifest, HistoryRevision, Marke
 from service.quant import engines as e
 from service.quant.assembly import directional_context
 from service.quant.baseline import compute_baseline
+from service.quant.radar import liquidity_universe
 from service.quant.configuration import QuantConfig, analysis_window, engine_context
 from service.quant.scoring import build_reference
 from service.quant.serialization import json_metrics
@@ -160,7 +161,10 @@ def build_market_snapshot(sessions, manifest_id: str, config: QuantConfig, *, mi
         payload = json_metrics({"versions": dependency, "members": reports, "reference": reference,
             "selection": {"policy": SELECTION_POLICY, "symbols": selected, "limit": 70},
             "excluded": excluded, "coverage_ratio": len(reports) / len(members), "warnings": warnings,
-            "model_age_days": model_age, "data_as_of": index.index[-1].date().isoformat()})
+            "model_age_days": model_age, "data_as_of": index.index[-1].date().isoformat(),
+            "liquidity_universe": liquidity_universe(
+                {symbol: data[symbol] for symbol in reports},
+                universe_id=f"snapshot:{snapshot_id}")})
         payload["reference_checksum"] = semantic_checksum(payload["reference"])
         payload["member_checksums"] = {symbol: semantic_checksum(report) for symbol, report in payload["members"].items()}
         hashed = semantic_checksum(payload)
