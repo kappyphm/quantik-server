@@ -1,6 +1,21 @@
-"""Vnstock v5 adapter; external I/O stays outside numerical engines."""
+"""Vnstock generation-6 adapter (data source: DNSE); external I/O stays
+outside numerical engines.
+
+Generation 6 differs from the retired generation 5 in ways that matter here:
+there is no login()/usage() flow for Market/Reference, data rights come from
+the account's own Open API key at the data source (read by the library from
+the process environment), and every call resolves through one configured
+source. The vci/vnd/kbs sources no longer exist.
+
+Certification is deliberately untouched: screening_validation still expects
+the generation-5/VCI basis, so DNSE histories fail certification closed until
+that basis is re-validated on DNSE data (spike first). Call shapes follow the
+vendor's documented generation-6 patterns and are verified by the spike
+scripts before this adapter is enabled in production.
+"""
 import contextlib
 import io
+import os
 import time
 from datetime import date, datetime, timedelta, timezone
 from importlib.metadata import version
@@ -11,6 +26,12 @@ from service.market_data import DataError, DailyHistory, normalize_history, norm
 from service.models import ProviderCall, ProviderGate
 
 WINDOWS = {"per_minute": 60, "per_hour": 3600, "per_day": 86400, "per_month": 31 * 86400}
+PROVIDER_VERSION = "6.0.1"
+SOURCE = "dnse"
+SECRET_SOURCES = {"dnse", "ssi"}  # Sources whose Open API uses key + secret.
+RETRYABLE_CODE_PREFIXES = ("VNSTOCK_AUTH_", "VNSTOCK_RATE", "VNSTOCK_NETWORK",
+    "VNSTOCK_TIMEOUT", "VNSTOCK_CONNECTION", "VNSTOCK_SERVER")
+RETRYABLE_TYPES = {"NetworkError", "RateLimitedError", "ProviderError", "CircuitOpenError"}
 
 
 def reserve_provider_call(db, limits: dict[str, int], now: int | None = None) -> None:
@@ -37,32 +58,34 @@ def reserve_provider_call(db, limits: dict[str, int], now: int | None = None) ->
 
 
 class VnstockProvider:
-    def __init__(self, api_key: str, sessions):
-        if version("vnstock") != "5.0.3":
+    def __init__(self, sessions, *, limits: dict[str, int], source: str = SOURCE,
+                 environ: dict | None = None):
+        if version("vnstock") != PROVIDER_VERSION:
             raise DataError("PROVIDER_VERSION_MISMATCH")
-        self.sessions = sessions
+        environ = os.environ if environ is None else environ
+        prefix = source.upper()
+        if not environ.get(f"{prefix}_API_KEY") or (source in SECRET_SOURCES
+                and not environ.get(f"{prefix}_API_SECRET")):
+            raise DataError("PROVIDER_SOURCE_KEY_MISSING")
+        self.sessions, self.source, self.limits = sessions, source, limits
         import vnstock
         from vnstock.core.exceptions import VnstockError
         self.library, self.error_type = vnstock, VnstockError
-        try:
-            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-                account = vnstock.login(api_key)
-                usage = vnstock.usage()
-        except VnstockError as exc:
-            raise self.safe_error(exc) from None
-        if not account.get("authenticated"):
-            raise DataError("PROVIDER_NOT_AUTHENTICATED")
-        self.tier = account.get("tier")
-        self.limits = usage.get("limits", {})
-        self.market, self.reference = vnstock.Market(), vnstock.Reference()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            vnstock.sources.use(source)
+            self.market, self.reference = vnstock.Market(), vnstock.Reference()
 
     @staticmethod
     def safe_error(exc) -> DataError:
         code = getattr(exc, "code", "VNSTOCK_ERROR")
         if not isinstance(code, str) or not code.startswith("VNSTOCK_") or len(code) > 100:
             code = "VNSTOCK_ERROR"
-        retryable = type(exc).__name__ in {"NetworkError", "RateLimitedError", "ProviderError", "CircuitOpenError"}
-        return DataError(code, retryable, 60 if retryable else None)
+        # Generation 6 codes are the stable contract. Auth-protocol failures
+        # are retryable: in November 2026 the vendor's generation migration
+        # made them terminal at attempt 1 and ingest died silently for days.
+        retryable = code.startswith(RETRYABLE_CODE_PREFIXES) or type(exc).__name__ in RETRYABLE_TYPES
+        retry_after = (300 if code.startswith("VNSTOCK_AUTH_") else 60) if retryable else None
+        return DataError(code, retryable, retry_after)
 
     def call(self, operation, *, operation_name: str = "unknown", source: str | None = None, symbol: str | None = None):
         with self.sessions() as db, db.begin():
@@ -83,8 +106,8 @@ class VnstockProvider:
             raise error from None
 
     def universe(self) -> dict:
-        result = normalize_universe(self.call(lambda: self.reference.equity.list_by_exchange(source="vci"),
-            operation_name="universe", source="vci"))
+        result = normalize_universe(self.call(lambda: self.reference.equity.list_by_exchange(),
+            operation_name="universe", source=self.source))
         result["provenance"] = "LIVE_UNVERIFIED"
         from service.screening_validation import certify_universe
         return certify_universe(result)
@@ -98,30 +121,17 @@ class VnstockProvider:
         # A daily window contains at most one bar per calendar day. Request its
         # full capacity without asking a source for an unrelated 20,000 bars.
         row_limit = min(20000, (target_session-start).days+1)
-        source = "vci"
         asset = self.market.equity(symbol) if kind == "EQUITY" else self.market.index(symbol)
         frame = self.call(lambda: asset.ohlcv(start=start.isoformat(), end=target_session.isoformat(),
-            interval="1D", limit=row_limit, source=source, floating=None),
-            operation_name="daily_history", source=source, symbol=symbol)
-        args = dict(symbol=symbol, kind=kind, source=source, target_session=target_session,
+            interval="1D", limit=row_limit),
+            operation_name="daily_history", source=self.source, symbol=symbol)
+        args = dict(symbol=symbol, kind=kind, source=self.source, target_session=target_session,
             observed_at=datetime.now(timezone.utc), input_mode=input_mode, minimum_bars=minimum_bars,
-            provenance="LIVE_UNVERIFIED")
-        repairs = []
-        try:
-            history = normalize_history(frame, **args)
-        except DataError as exc:
-            if exc.code != "INVALID_OHLC" or input_mode != "COMPLETED_DAILY":
-                raise
-            secondary_source = "kbs" if kind == "INDEX" else "vnd"
-            secondary = self.call(lambda: asset.ohlcv(start=start.isoformat(), end=target_session.isoformat(),
-                interval="1D", limit=row_limit, source=secondary_source, floating=None),
-                operation_name="history_correction", source=secondary_source, symbol=symbol)
-            from service.provider_repair import replace_invalid_ohlc
-            repaired, repairs = replace_invalid_ohlc(frame, secondary, secondary_source)
-            history = normalize_history(repaired, **args)
-        if repairs:
-            history.payload["metadata"]["source_corrections"] = repairs
-            history.payload["metadata"]["warnings"].append("CANDLES_REPLACED_FROM_CORROBORATED_SOURCE")
+            provenance="LIVE_UNVERIFIED", provider_version=PROVIDER_VERSION)
+        # Generation 5 repaired invalid OHLC from vnd/kbs; both sources are
+        # gone in generation 6, so invalid candles fail closed until the
+        # spike establishes a DNSE repair strategy.
+        history = normalize_history(frame, **args)
         history.payload["metadata"]["requested_start"] = start.isoformat()
         from service.screening_validation import certify_history
         return certify_history(history)
@@ -132,6 +142,10 @@ class VnstockProvider:
         VCI trade_history can cap a response at 1,000 rows even when a larger
         limit is requested. Disjoint 500-calendar-day windows cannot reach that
         cap for daily records. Each request uses the shared provider budget.
+
+        Generation 6 removes VCI entirely, so this audit cannot run on DNSE
+        histories: it fails closed on the source check below until an
+        equivalent DNSE reference is validated by the spike.
         """
         import pandas as pd
         from service.adjustment_validation import verify_adjusted_prices

@@ -226,6 +226,9 @@ def finish(sessions: sessionmaker[Session], task_id: str, token: str, *, result:
             task.execution_token, task.lease_until = None, 0
             if error and not retry:
                 mark_screening_missed(db, task, now)
+                from service.telemetry import emit
+                emit("scheduled_task.failed", task_id=task.id, kind=task.kind,
+                    code=error.code, attempt=task.attempt)
     with sessions() as db, db.begin():
         db.execute(update(ScheduledLane).where(ScheduledLane.execution_token == token)
             .values(execution_token=None, lease_until=0))

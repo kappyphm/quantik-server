@@ -1,6 +1,6 @@
 from uuid import uuid4
 
-from sqlalchemy import Boolean, CheckConstraint, Date, ForeignKey, Integer, JSON, String, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, Date, Float, ForeignKey, Integer, JSON, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from datetime import date
 from sqlalchemy.orm import Mapped, mapped_column
@@ -513,3 +513,28 @@ class IntegrationConfig(Base):
     encrypted_payload: Mapped[str | None] = mapped_column(String)
     updated_at: Mapped[int | None] = mapped_column(Integer)
     actor_id: Mapped[str | None] = mapped_column(ForeignKey("accounts.id"))
+
+
+class Portfolio(Base):
+    """One server-side portfolio per account (positions + cash).
+
+    Replaces the client-only localStorage portfolio of the Portfolio
+    Intelligence screen; quantities are shares, money values are VND.
+    """
+
+    __tablename__ = "portfolios"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), unique=True, index=True)
+    cash_vnd: Mapped[float] = mapped_column(Float, default=0)
+    updated_at: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class PortfolioPosition(Base):
+    __tablename__ = "portfolio_positions"
+    __table_args__ = (UniqueConstraint("portfolio_id", "symbol"),
+        CheckConstraint("quantity > 0"), CheckConstraint("cost_vnd >= 0"))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    portfolio_id: Mapped[str] = mapped_column(ForeignKey("portfolios.id"), index=True)
+    symbol: Mapped[str] = mapped_column(String(16))
+    quantity: Mapped[int] = mapped_column(Integer)
+    cost_vnd: Mapped[float] = mapped_column(Float)

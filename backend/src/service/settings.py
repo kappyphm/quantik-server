@@ -29,6 +29,14 @@ class Settings(BaseSettings):
     payments_enabled: bool = False
     scheduled_provider_enabled: bool = False
     vnstock_api_key: SecretStr = Field(default=SecretStr(""), validation_alias="VNSTOCK_API_KEY")
+    dnse_api_key: SecretStr = Field(default=SecretStr(""), validation_alias="DNSE_API_KEY")
+    dnse_api_secret: SecretStr = Field(default=SecretStr(""), validation_alias="DNSE_API_SECRET")
+    # Provisional DNSE source limits for the provider gate; replace with the
+    # measured account limits from the generation-6 spike before production.
+    dnse_limit_per_minute: int = Field(default=60, gt=0, validation_alias="DNSE_LIMIT_PER_MINUTE")
+    dnse_limit_per_hour: int = Field(default=3000, gt=0, validation_alias="DNSE_LIMIT_PER_HOUR")
+    dnse_limit_per_day: int = Field(default=30000, gt=0, validation_alias="DNSE_LIMIT_PER_DAY")
+    dnse_limit_per_month: int = Field(default=600000, gt=0, validation_alias="DNSE_LIMIT_PER_MONTH")
     integration_encryption_key_path: Path = Path("runtime/integration-encryption.key")
     metrics_token: SecretStr = SecretStr("")
     release_id: str = Field(default="development", pattern=r"^[A-Za-z0-9._-]{1,64}$")

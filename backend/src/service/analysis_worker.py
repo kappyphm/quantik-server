@@ -56,6 +56,7 @@ def resolve_inputs(db, job: Job, settings: Settings) -> dict:
         MarketSnapshot.payload["members"][job.symbol].label("member"),
         MarketSnapshot.payload["member_checksums"][job.symbol].as_string().label("member_checksum"),
         MarketSnapshot.payload["reference"].label("reference"),
+        MarketSnapshot.payload["liquidity_universe"].label("liquidity_universe"),
         MarketSnapshot.payload["reference_checksum"].as_string().label("reference_checksum"),
         MarketSnapshot.payload["warnings"].label("warnings"))
     row = db.execute(stmt.where(MarketSnapshot.id == snapshot_id, MarketSnapshot.status == "READY",
@@ -104,6 +105,7 @@ def resolve_inputs(db, job: Job, settings: Settings) -> dict:
     if pinned and pinned != versions:
         raise DataError("PINNED_INPUTS_MISMATCH")
     return {"member": row.member, "reference": row.reference, "config": config, "versions": versions,
+        "liquidity_universe": row.liquidity_universe,
         "history": DailyHistory(job.symbol, history.target_session, history.input_mode, history.payload),
         "warnings": warnings, "evaluated_at": evaluated_at}
 
@@ -194,7 +196,8 @@ class AnalysisWorker:
                     data_as_of=datetime.combine(job.target_session, datetime.min.time(), timezone.utc),
                     target_session=job.target_session,
                     data_observed_at=datetime.fromisoformat(inputs["history"].payload["metadata"]["observed_at"]).astimezone(timezone.utc),
-                    versions=inputs["versions"], config=inputs["config"], warnings=inputs["warnings"])
+                    versions=inputs["versions"], config=inputs["config"], warnings=inputs["warnings"],
+                    liquidity_universe=inputs.get("liquidity_universe"))
                 if heartbeat.lost.is_set():
                     raise jobs.JobError("STALE_EXECUTION")
                 with self.sessions() as db, db.begin():
