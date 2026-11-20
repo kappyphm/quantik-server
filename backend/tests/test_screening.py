@@ -97,7 +97,7 @@ def test_screening_publication_deadline_all_results_and_api(tmp_path, monkeypatc
                     frame["volume"] = 100
                 frame["volume"] = frame.volume.round()
                 history = normalize_history(frame.reset_index(names="time"), symbol=symbol,
-                    kind="INDEX" if symbol == "VNINDEX" else "EQUITY", source="kbs" if symbol == "VNINDEX" else "vci",
+                    kind="INDEX" if symbol == "VNINDEX" else "EQUITY", source="dnse", provider_version="6.0.1",
                     target_session=pd.Timestamp(day).date(), observed_at=observed, input_mode=mode, minimum_bars=1,
                     provenance="LIVE_UNVERIFIED" if certified else "FIXTURE")
                 if certified:
@@ -247,7 +247,7 @@ def test_screening_stale_fallback_within_five_sessions(tmp_path, monkeypatch):
         frame = prices(day, n=80, volume=200000)
         frame["volume"] = frame.volume.round()
         history = normalize_history(frame.reset_index(names="time"), symbol=symbol,
-            kind="INDEX" if symbol == "VNINDEX" else "EQUITY", source="kbs" if symbol == "VNINDEX" else "vci",
+            kind="INDEX" if symbol == "VNINDEX" else "EQUITY", source="dnse", provider_version="6.0.1",
             target_session=pd.Timestamp(day).date(), observed_at=observed, input_mode="COMPLETED_DAILY",
             minimum_bars=1, provenance="FIXTURE")
         return save_history(db, history)
@@ -292,7 +292,7 @@ def test_screening_contract_evidence_binds_content_without_promoting_quant():
     from service.market_data import DailyHistory
     from service.screening_validation import certify_history, certify_universe, eligible
     day = pd.Timestamp("2026-10-15").date()
-    h = normalize_history(prices(day).round().reset_index(names="time"), symbol="FPT", kind="EQUITY", source="vci",
+    h = normalize_history(prices(day).round().reset_index(names="time"), symbol="FPT", kind="EQUITY", source="dnse", provider_version="6.0.1",
         target_session=day, observed_at=datetime(2026, 10, 15, 16, 10, tzinfo=VN), minimum_bars=50, provenance="LIVE_UNVERIFIED")
     assert not eligible(h.payload)
     certified = certify_history(h)

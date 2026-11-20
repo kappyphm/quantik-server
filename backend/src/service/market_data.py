@@ -136,6 +136,11 @@ def normalize_universe(frame: pd.DataFrame) -> dict:
         raise DataError("UNIVERSE_SCHEMA")
     members = {}
     for row in frame.to_dict("records"):
+        # Generation-6 listings mix instrument types (warrants, bonds, ETFs,
+        # futures); the universe is equities only, as under generation 5 whose
+        # listing carried no type column.
+        if "type" in row and str(row["type"]).strip().lower() != "stock":
+            continue
         symbol = str(row["symbol"]).strip().upper()
         exchange = str(row["exchange"]).strip().upper()
         exchange = {"HSX": "HOSE", "UPCoM".upper(): "UPCOM"}.get(exchange, exchange)
@@ -144,6 +149,8 @@ def normalize_universe(frame: pd.DataFrame) -> dict:
         if not re.fullmatch(r"[A-Z0-9]{2,16}", symbol) or symbol in members:
             raise DataError("INVALID_OR_DUPLICATE_INSTRUMENT")
         sector = row.get("icb_code_lv2")
+        if sector is None or pd.isna(sector):
+            sector = row.get("icb_code")
         members[symbol] = {"exchange": exchange, "sector": None if pd.isna(sector) else str(sector)}
     if not members:
         raise DataError("EMPTY_UNIVERSE")
