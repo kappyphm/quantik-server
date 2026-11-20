@@ -7,6 +7,10 @@ from test_adjustment_validation import inputs
 
 def test_provider_contract_acceptance_keeps_unverified_adjustment_warning():
     history, _ = inputs()
+    # inputs() builds the generation-5 audit fixture; restamp it to the
+    # generation-6 basis that screening certifies for new ingests.
+    history.payload["metadata"]["provider_version"] = "6.0.1"
+    history.payload["metadata"]["source"] = "dnse"
     payload = certify_history(history).payload
     assert history_accepted(payload)
     assert history_header_accepted(payload["metadata"])

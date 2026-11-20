@@ -140,7 +140,8 @@ def main() -> int:
             with engine.connect() as conn:
                 row = conn.execute(text(
                     "SELECT payload FROM history_revisions WHERE symbol = 'FPT' "
-                    "ORDER BY target_session DESC LIMIT 1")).first()
+                    "AND input_mode = 'COMPLETED_DAILY' "
+                    "ORDER BY target_session DESC, id DESC LIMIT 1")).first()
             certified = {bar["session"]: bar["close"] for bar in row[0]["bars"]}
             mine = {str(t)[:10]: float(c) * 1000 for t, c in zip(frame["time"], frame["close"])}
             common = sorted(set(certified) & set(mine))
@@ -167,7 +168,11 @@ def main() -> int:
 
     # 7. Burst probe: latency and rate behaviour over distinct symbols.
     try:
-        symbols = [str(s) for s in listing["symbol"].head(args.burst)] if listing is not None else ["FPT"] * args.burst
+        if listing is not None and "type" in listing.columns:
+            equities = listing[listing["type"].str.lower().eq("stock")]
+        else:
+            equities = listing
+        symbols = [str(s) for s in equities["symbol"].head(args.burst)] if equities is not None else ["FPT"] * args.burst
         latencies, errors = [], []
         begin = time.time()
         for symbol in symbols:

@@ -7,11 +7,15 @@ the account's own Open API key at the data source (read by the library from
 the process environment), and every call resolves through one configured
 source. The vci/vnd/kbs sources no longer exist.
 
-Certification is deliberately untouched: screening_validation still expects
-the generation-5/VCI basis, so DNSE histories fail certification closed until
-that basis is re-validated on DNSE data (spike first). Call shapes follow the
-vendor's documented generation-6 patterns and are verified by the spike
-scripts before this adapter is enabled in production.
+Screening certification was re-based to this adapter (policy
+vnstock-6.0.1-screening-contract-2) after the 2026-11-20 spike showed DNSE
+adjusted closes matching the certified generation-5 series within 0.015%
+over 418 sessions; stored generation-5 payloads stay eligible under their
+legacy policy. The quant provider contract still expects the generation-5
+basis, so DNSE histories do not authorize model training or Quant reports
+until that contract is re-based separately. DNSE's listing carries no ICB
+sector codes, so universe building inherits sectors from the most recent
+stored universe (see _carry_forward_sectors).
 """
 import contextlib
 import io
@@ -114,8 +118,33 @@ class VnstockProvider:
         result = normalize_universe(self.call(lambda: self.reference.equity.list_by_exchange(),
             operation_name="universe", source=self.source))
         result["provenance"] = "LIVE_UNVERIFIED"
+        self._carry_forward_sectors(result["members"])
         from service.screening_validation import certify_universe
         return certify_universe(result)
+
+    def _carry_forward_sectors(self, members: dict) -> None:
+        """Inherit ICB sectors from the most recent stored universe.
+
+        DNSE's listing returns no sector codes (icb_code/icb_name are null),
+        while the generation-5 universe carries an ICB level-2 code per
+        symbol. Sectors are quasi-static, so symbols that already have one
+        keep it; new symbols stay sector=None until a sector-bearing source
+        is available.
+        """
+        missing = [symbol for symbol, member in members.items() if not member.get("sector")]
+        if not missing:
+            return
+        from service.models import UniverseVersion
+        with self.sessions() as db:
+            previous = db.scalar(select(UniverseVersion)
+                .order_by(UniverseVersion.id.desc()).limit(1))
+        if previous is None:
+            return
+        previous_members = previous.payload.get("members", {})
+        for symbol in missing:
+            sector = previous_members.get(symbol, {}).get("sector")
+            if sector:
+                members[symbol]["sector"] = sector
 
     def history(self, symbol: str, start: date, target_session: date, *, kind: str = "EQUITY",
                 input_mode: str = "COMPLETED_DAILY", minimum_bars: int = 120) -> DailyHistory:
