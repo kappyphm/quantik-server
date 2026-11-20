@@ -37,7 +37,12 @@ def training_panel(data: dict[str, pd.DataFrame], index: pd.DataFrame,
             if frame.index[-1] != target_session or not frame.index.is_unique or not frame.index.is_monotonic_increasing:
                 raise ValueError("Mixed or invalid target sessions")
             if not frame.index.isin(index.index).all():
-                raise ValueError("Missing index sessions")
+                # An index feed can miss isolated sessions that equities
+                # traded (observed: the DNSE VNINDEX series lacks two
+                # sessions present in every equity series). Market-relative
+                # features cannot be computed for those sessions, so drop
+                # them from the symbol frame instead of aborting training.
+                frame = frame.loc[frame.index.isin(index.index)]
             features = Features._feature_frame(frame, market_returns, sector_returns[sector_map[symbol]],
                 config.FORECAST_HORIZON)
             features["label_end"] = pd.Series(frame.index, index=frame.index).shift(-config.FORECAST_HORIZON)
