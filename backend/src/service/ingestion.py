@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import func, select
 
 from service.db import make_engine, session_factory
+from service.integrations import read as read_integration
 from service.market_data import DataError, checksum, publish_manifest, save_history, save_universe
 from service.models import HistoryRevision, UniverseVersion
 from service.settings import Settings
@@ -88,9 +89,15 @@ def ingest_market(settings: Settings, start: date, target_session: date,
                     operation_guard(db)
 
         guard()
+        with sessions() as db:
+            values, _row = read_integration(db, "vnstock", settings)
+        account_key = values["api_key"]
+        if not account_key:
+            raise DataError("PROVIDER_API_KEY_MISSING")
         provider = VnstockProvider(sessions, limits={
             "per_minute": settings.dnse_limit_per_minute, "per_hour": settings.dnse_limit_per_hour,
-            "per_day": settings.dnse_limit_per_day, "per_month": settings.dnse_limit_per_month})
+            "per_day": settings.dnse_limit_per_day, "per_month": settings.dnse_limit_per_month},
+            account_key=account_key)
         guard()
         current_day = datetime.now(ZoneInfo("Asia/Ho_Chi_Minh"))
         day_start = int(current_day.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())

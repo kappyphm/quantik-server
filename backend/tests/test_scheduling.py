@@ -164,7 +164,7 @@ def test_ingestion_resume_preserves_provider_budget(tmp_path, monkeypatch):
     target, start = date(2026, 10, 15), date(2021, 1, 1)
 
     class Provider:
-        def __init__(self, *_):
+        def __init__(self, *_, **__):
             pass
 
         def universe(self):

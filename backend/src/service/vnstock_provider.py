@@ -59,10 +59,15 @@ def reserve_provider_call(db, limits: dict[str, int], now: int | None = None) ->
 
 class VnstockProvider:
     def __init__(self, sessions, *, limits: dict[str, int], source: str = SOURCE,
-                 environ: dict | None = None):
+                 account_key: str | None = None, environ: dict | None = None):
         if version("vnstock") != PROVIDER_VERSION:
             raise DataError("PROVIDER_VERSION_MISMATCH")
         environ = os.environ if environ is None else environ
+        if account_key:
+            # Generation 6 reads the vnstock account key (tier/device check)
+            # from the environment; the integration-config value resolved by
+            # the caller (database wins over environment) is authoritative.
+            environ["VNSTOCK_API_KEY"] = account_key
         prefix = source.upper()
         if not environ.get(f"{prefix}_API_KEY") or (source in SECRET_SOURCES
                 and not environ.get(f"{prefix}_API_SECRET")):
