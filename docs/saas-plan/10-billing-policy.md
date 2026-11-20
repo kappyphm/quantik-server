@@ -10,6 +10,11 @@ active-job limit 1–10, implemented screening/analysis features. Versions start
 can change. New prices/quotas require new versions. Existing orders pin version, price, receiving account,
 account name and transfer content, unaffected by plan withdrawal or subsequent environment changes.
 
+Screening reads are metered per plan per day (Asia/Ho_Chi_Minh): each plan version carries a positive
+`screening_quota` — Free 5 views/day, QuanTik Pro 20 views/day. Loading the results board or one symbol's
+screening detail costs one view; the latest pointer is unmetered and reports the remaining quota.
+Exhaustion returns 403 SCREENING_QUOTA_EXCEEDED. Demo accounts are unmetered. Owner decision 2026-11-20.
+
 POST /orders requires Idempotency-Key; same account/key/plan returns the original, different plan conflicts.
 Maximum five unexpired pending orders/account. Reference is QTK + 16 random hex digits; expiry 30 minutes.
 Response includes amount/reference/content and QR URL. GET derives EXPIRED from deadline without writes.

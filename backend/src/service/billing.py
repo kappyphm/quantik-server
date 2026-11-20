@@ -24,6 +24,7 @@ class PlanInput(BaseModel):
     price_vnd: int = Field(ge=1000, le=100_000_000)
     duration_days: int = Field(ge=1, le=366)
     analysis_quota: int = Field(ge=1, le=100_000, validation_alias=AliasChoices("daily_request_limit", "analysis_quota"))
+    screening_quota: int = Field(default=5, ge=1, le=100_000)
     active_limit: int = Field(ge=1, le=10)
     replaces_plan_id: str | None = Field(default=None, min_length=36, max_length=36)
     features: dict[str, bool] = Field(default_factory=lambda: {"screening": True, "analysis": True})
@@ -110,7 +111,7 @@ def create_plan(db: Session, body: PlanInput, actor_id: str, key: str | None = N
 
 def plan_view(plan: PlanVersion) -> dict:
     return {key: getattr(plan, key) for key in ("id", "name", "price_vnd", "duration_days", "analysis_quota",
-        "active_limit", "features", "available", "replaces_plan_id") } | {"currency": "VND", "renewal": "PREPAID_NEXT_PERIOD",
+        "screening_quota", "active_limit", "features", "available", "replaces_plan_id") } | {"currency": "VND", "renewal": "PREPAID_NEXT_PERIOD",
         "daily_request_limit": plan.analysis_quota, "quota_period": "DAY", "quota_timezone": "Asia/Ho_Chi_Minh"}
 
 

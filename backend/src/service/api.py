@@ -380,7 +380,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 reasons.append("CALENDAR_OUT_OF_RANGE")
         if calendar_status != "READY" and int(time.time()) - run.published_at > 36*3600:
             reasons.append("PUBLICATION_AGE")
-        return {**screening_header(run), "stale": bool(reasons), "refresh_after_seconds": 60}
+        from service.screening_access import quota_status
+        return {**screening_header(run), "stale": bool(reasons), "refresh_after_seconds": 60,
+            "screening_quota": quota_status(db, account.id)}
 
     @app.get("/api/v1/screenings/{run_id}/results", response_model=ScreeningPage)
     def screening_results(run_id: str, group: Literal["OVERALL", "DISTRIBUTION"] = "OVERALL",
@@ -393,6 +395,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if run.status != "READY":
             raise jobs.JobError("SCREENING_RUN_NOT_READY", 409)
         require_screening_source(run)
+        from service.screening_access import consume_view
+        consume_view(db, account.id)
         from service.screening_views import top_results
         return top_results(db, run_id, group)
 
@@ -410,6 +414,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         row = db.get(ScreeningResult, (run_id, symbol.upper()))
         if not row or not any(rank is not None and 1 <= rank <= 5 for rank in (row.overall_rank, row.distribution_rank)):
             raise jobs.JobError("NOT_FOUND", 404)
+        from service.screening_access import consume_view
+        consume_view(db, account.id)
         return detail_view(run, row)
 
     @app.get("/api/v1/instruments")
