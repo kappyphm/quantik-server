@@ -79,4 +79,6 @@ def consume_view(db, account_id: str) -> None:
     if row.used >= plan.screening_quota:
         raise JobError("SCREENING_QUOTA_EXCEEDED", 403)
     row.used += 1
-    db.flush()
+    # The screening reads never commit their request session; the charge is
+    # an admission side effect and must persist on its own.
+    db.commit()
