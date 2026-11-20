@@ -72,8 +72,8 @@ def test_admin_vnstock_rotation_encryption_and_ingestion(context, monkeypatch):
         assert integrations.read(db, "vnstock", settings)[0]["api_key"] == body["api_key"]
     calls = []
     class Provider:
-        def __init__(self, key, *_):
-            calls.append(key)
+        def __init__(self, sessions, *_, account_key=None, **__):
+            calls.append(account_key)
         def universe(self):
             raise DataError("PROBE_FINISHED_WITHOUT_NETWORK")
     monkeypatch.setattr(ingestion, "VnstockProvider", Provider)
