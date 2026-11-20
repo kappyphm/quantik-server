@@ -42,26 +42,44 @@ def _account_with_plan(db, name: str, screening_quota: int) -> Account:
 def test_free_plan_allows_five_views_then_blocks(tmp_path, monkeypatch):
     factory = _db(tmp_path, monkeypatch)
     with factory() as db, db.begin():
-        account = _account_with_plan(db, "Free", 5)
+        account_id = _account_with_plan(db, "Free", 5).id
+    with factory() as db:
         for _ in range(5):
-            consume_view(db, account.id)
-        assert quota_status(db, account.id) == {"limit": 5, "used": 5, "remaining": 0}
+            consume_view(db, account_id)
+        assert quota_status(db, account_id) == {"limit": 5, "used": 5, "remaining": 0}
         with pytest.raises(JobError) as caught:
-            consume_view(db, account.id)
+            consume_view(db, account_id)
         assert caught.value.code == "SCREENING_QUOTA_EXCEEDED"
         assert db.scalar(select(ScreeningUsage.used).where(
-            ScreeningUsage.account_id == account.id)) == 5
+            ScreeningUsage.account_id == account_id)) == 5
 
 
 def test_pro_plan_allows_twenty_views(tmp_path, monkeypatch):
     factory = _db(tmp_path, monkeypatch)
     with factory() as db, db.begin():
-        account = _account_with_plan(db, "QuanTik Pro", 20)
+        account_id = _account_with_plan(db, "QuanTik Pro", 20).id
+    with factory() as db:
         for _ in range(20):
-            consume_view(db, account.id)
-        assert quota_status(db, account.id)["remaining"] == 0
+            consume_view(db, account_id)
+        assert quota_status(db, account_id)["remaining"] == 0
         with pytest.raises(JobError):
-            consume_view(db, account.id)
+            consume_view(db, account_id)
+
+
+def test_views_persist_across_request_sessions(tmp_path, monkeypatch):
+    """Each request gets its own session; the charge must survive its close."""
+    factory = _db(tmp_path, monkeypatch)
+    with factory() as db, db.begin():
+        account = _account_with_plan(db, "Free", 5)
+        account_id = account.id
+    for _ in range(5):
+        with factory() as db:
+            consume_view(db, account_id)
+    with factory() as db:
+        assert quota_status(db, account_id) == {"limit": 5, "used": 5, "remaining": 0}
+        with pytest.raises(JobError) as caught:
+            consume_view(db, account_id)
+        assert caught.value.code == "SCREENING_QUOTA_EXCEEDED"
 
 
 def test_no_subscription_still_requires_subscription(tmp_path, monkeypatch):
