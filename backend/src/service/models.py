@@ -349,15 +349,26 @@ class PublishedScreening(Base):
     run_id: Mapped[str] = mapped_column(ForeignKey("screening_runs.id"))
 
 
+class ScreeningUsage(Base):
+    """Daily screening views per account, metered against the plan quota."""
+    __tablename__ = "screening_usages"
+    __table_args__ = (CheckConstraint("used >= 0"), UniqueConstraint("account_id", "day_start"))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
+    day_start: Mapped[int] = mapped_column(Integer)
+    used: Mapped[int] = mapped_column(Integer, default=0)
+
+
 class PlanVersion(Base):
     __tablename__ = "plan_versions"
-    __table_args__ = (CheckConstraint("price_vnd >= 0 AND duration_days > 0 AND analysis_quota > 0 AND active_limit > 0", name="ck_plan_terms"),
+    __table_args__ = (CheckConstraint("price_vnd >= 0 AND duration_days > 0 AND analysis_quota > 0 AND screening_quota > 0 AND active_limit > 0", name="ck_plan_terms"),
         UniqueConstraint("created_by", "creation_key"))
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     name: Mapped[str] = mapped_column(String(100))
     price_vnd: Mapped[int] = mapped_column(Integer)
     duration_days: Mapped[int] = mapped_column(Integer)
     analysis_quota: Mapped[int] = mapped_column(Integer)
+    screening_quota: Mapped[int] = mapped_column(Integer, default=5)
     active_limit: Mapped[int] = mapped_column(Integer)
     features: Mapped[dict] = mapped_column(JSON)
     available: Mapped[bool] = mapped_column(Boolean, default=False)

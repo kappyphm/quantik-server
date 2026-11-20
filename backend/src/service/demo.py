@@ -56,6 +56,7 @@ def ensure_demo_account(db) -> Account:
     if plan is None:
         plan = PlanVersion(id=DEMO_PLAN_ID, name="Demo", price_vnd=0,
                            duration_days=DEMO_PLAN_YEARS * 365, analysis_quota=DEMO_PLAN_QUOTA,
+                           screening_quota=DEMO_PLAN_QUOTA,
                            active_limit=DEMO_PLAN_ACTIVE_LIMIT,
                            features={"screening": True, "analysis": True},
                            available=False, created_at=int(time.time()))
