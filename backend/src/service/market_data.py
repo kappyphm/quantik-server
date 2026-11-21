@@ -151,7 +151,11 @@ def normalize_universe(frame: pd.DataFrame) -> dict:
         sector = row.get("icb_code_lv2")
         if sector is None or pd.isna(sector):
             sector = row.get("icb_code")
-        members[symbol] = {"exchange": exchange, "sector": None if pd.isna(sector) else str(sector)}
+        name = row.get("organ_name")
+        if name is None or pd.isna(name):
+            name = row.get("name")
+        members[symbol] = {"exchange": exchange, "sector": None if pd.isna(sector) else str(sector),
+            "name": None if name is None or pd.isna(name) else str(name).strip() or None}
     if not members:
         raise DataError("EMPTY_UNIVERSE")
     return {"version": "universe-1", "members": dict(sorted(members.items())), "provenance": "FIXTURE"}

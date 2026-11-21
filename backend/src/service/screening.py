@@ -162,10 +162,12 @@ def run_screening(sessions, target_session, slot: str, *, manifest_id: str | Non
             history_ids = manifest.histories.copy()
             source_is_live = universe.payload.get("provenance") == "LIVE_VALIDATED" and index_record.payload["metadata"].get("provenance") == "LIVE_VALIDATED"
             screening_live = eligible(universe.payload, universe=True) and eligible(index_record.payload)
-        from service.quant.screening import evaluate_symbol, market_context, rank_results
+        from service.quant.screening import (evaluate_symbol, log_return_tail, market_context,
+            rank_results, sector_contexts, sheet_stats)
         from service.quant.screening_legacy import RegimeAdjustment
         context = market_context(index, mode)
         results, unavailable, stale_map, ready_count = [], {}, {}, 0
+        log_returns = {}
         for symbol, instrument in sorted(members.items()):
             frame, observed_at, stale = None, None, None
             with sessions() as db, db.begin():
@@ -200,6 +202,10 @@ def run_screening(sessions, target_session, slot: str, *, manifest_id: str | Non
             result = evaluate_symbol(symbol, frame, index, input_mode=mode,
                 minimum_average_volume=POLICY["minimum_average_volume_shares"])
             result["exchange"] = instrument["exchange"]
+            result["sheet_stats"] = sheet_stats(frame, mode, instrument["exchange"])
+            returns = log_return_tail(frame)
+            if returns is not None:
+                log_returns[symbol] = returns
             result["warnings"] = sorted(set(result["warnings"] + (history.payload["metadata"].get("warnings", []) if frame is not None else [])))
             result["volume_context"]["observed_at"] = observed_at
             if symbol in unavailable:
@@ -218,6 +224,10 @@ def run_screening(sessions, target_session, slot: str, *, manifest_id: str | Non
                 result["assessment"]["adjusted_signal"] = RegimeAdjustment()._apply_regime_adjustment(
                     *scores, context["screening_adjustments"])
             results.append(result)
+        contexts = sector_contexts(log_returns,
+            {symbol: instrument.get("sector") for symbol, instrument in members.items()})
+        for result in results:
+            result["sector_context"] = contexts.get(result["symbol"])
         coverage = ready_count / len(members) if members else 0
         rankings = rank_results(results, POLICY["top_n"])
         if not any(rankings[group] for group in ["STRONG", "ACCUMULATION", "DISTRIBUTION"]):

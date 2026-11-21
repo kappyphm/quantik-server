@@ -403,7 +403,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/v1/screenings/{run_id}/symbols/{symbol}", response_model=ScreeningDetail)
     def screening_symbol(run_id: str, symbol: str, account=Depends(user), db=Depends(db_session)):
         from service.screening_access import require_access
-        from service.screening_views import detail_view
+        from service.screening_views import detail_view, run_members
         require_access(db, account.id)
         run = db.get(ScreeningRun, run_id)
         if not run:
@@ -416,7 +416,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise jobs.JobError("NOT_FOUND", 404)
         from service.screening_access import consume_view
         consume_view(db, account.id)
-        return detail_view(run, row)
+        return detail_view(run, row, run_members(db, run).get(symbol.upper()))
 
     @app.get("/api/v1/instruments")
     def instruments(cursor: str | None = None, exchange: Literal["HOSE", "HNX", "UPCOM"] | None = None,

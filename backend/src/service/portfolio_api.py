@@ -66,7 +66,7 @@ def router(user: Callable, db_session: Callable) -> APIRouter:
         for row in db.scalars(select(ScreeningResult).where(ScreeningResult.run_id == run.id)):
             summary = (row.payload or {}).get("price_summary") or {}
             meta = members.get(row.symbol, {})
-            items.append({"symbol": row.symbol, "name": None,
+            items.append({"symbol": row.symbol, "name": meta.get("name"),
                 "exchange": meta.get("exchange") or row.payload.get("exchange"),
                 "sector": meta.get("sector"),
                 "price_vnd": summary.get("close"),
