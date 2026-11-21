@@ -26,7 +26,7 @@ jobs:
       - name: Run backend tests
         env:
           QUANTIK_NUMERICAL_THREADS: "1"
-        run: cd backend && python -m pytest tests -q
+        run: python -m pytest backend/tests -q
 
   deploy:
     name: Deploy backend to VPS
