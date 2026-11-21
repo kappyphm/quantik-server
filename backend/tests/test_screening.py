@@ -158,7 +158,7 @@ def test_screening_publication_deadline_all_results_and_api(tmp_path, monkeypatc
         with sessions() as db, db.begin():
             now = int(time.time())
             plan = PlanVersion(name="Screening test", price_vnd=10000, duration_days=30, analysis_quota=20,
-                active_limit=1, features={"screening": True, "analysis": True}, available=True, created_at=now)
+                screening_quota=100000, active_limit=1, features={"screening": True, "analysis": True}, available=True, created_at=now)
             db.add(plan); db.flush()
             order = PurchaseOrder(account_id=account.id, plan_id=plan.id, idempotency_key="screen", reference="QTKSCREEN",
                 amount_vnd=10000, bank_code="TPBANK", bank_account="111", account_name="Test", transfer_content="QTKSCREEN", created_at=now, expires_at=now+600)

@@ -274,3 +274,13 @@ Earlier cancellation policy notes in this log describe superseded behavior.
 Tests create paid subscription fixtures only in isolated databases and settle
 jobs through worker success/failure. Runtime services contain no testing grant
 or orphan-bucket fallback. No schema or operational account-data change is needed.
+
+## 2026-11-21 — Training policy temporal-beta-2 (owner decision)
+
+Owner decision 2026-11-21: raise `maximum_baseline_rmse_ratio` from 1.0 to 1.01,
+recorded as policy version `temporal-beta-2`. Evidence: four consecutive trainings
+rejected on this gate alone (cutoffs 2026-10-23, 2026-10-30, 2026-11-06, 2026-11-11);
+the 2026-11-11 model beat the baseline on absolute RMSE (6.8863 vs 6.8880) and rank IC
+(0.0902 vs minimum 0.02) and missed alpha RMSE by 0.31% (6.6480 vs 6.6277). With no
+published model inside its 28-day validity window, Quant analysis admission was closed
+for every plan. All other gates unchanged.

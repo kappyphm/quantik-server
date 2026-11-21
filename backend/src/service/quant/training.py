@@ -11,14 +11,18 @@ from service.quant.engines import CrossSectionalLightGBMEngine as Features
 
 @dataclass(frozen=True)
 class TrainingPolicy:
-    version: str = "temporal-beta-1"
+    version: str = "temporal-beta-2"
     holdout_sessions: int = 40
     minimum_train_rows: int = 400
     minimum_symbols: int = 5
     minimum_validation_rows: int = 150
     minimum_rank_days: int = 20
     minimum_rank_ic: float = 0.02
-    maximum_baseline_rmse_ratio: float = 1.0
+    # Owner decision 2026-11-21: 1.01 (was 1.0 in temporal-beta-1). Four
+    # consecutive trainings were rejected on this gate alone while beating
+    # the baseline on absolute RMSE and rank IC; the 2026-11-11 model missed
+    # alpha RMSE by 0.31%. Rank IC and the other gates are unchanged.
+    maximum_baseline_rmse_ratio: float = 1.01
     threads: int = 1
 
 

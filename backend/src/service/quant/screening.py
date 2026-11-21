@@ -128,6 +128,105 @@ def evaluate_symbol(symbol: str, frame: pd.DataFrame | None, index: pd.DataFrame
     return json_metrics(result)
 
 
+def sheet_stats(frame: pd.DataFrame | None, input_mode: str, exchange: str) -> dict | None:
+    """Sheet statistics for one symbol from its completed daily bars.
+
+    Mirrors the report engines over the last 252 completed sessions so the
+    screening sheet and per-symbol reports agree: StatEngine for the return
+    statistics, LiquidityEngine thresholds for tier and capacity.
+    """
+    if frame is None or frame.empty or not {"open", "close", "volume"}.issubset(frame.columns):
+        return None
+    completed = frame.iloc[:-1] if input_mode == "PROVISIONAL_DAILY" else frame
+    if len(completed) < 20:
+        return None
+    from service.quant.configuration import CFG
+    from service.quant.engines import StatEngine, VNMarketRules
+    window = completed.tail(253)
+    closes = window["close"].astype(float)
+    stats = StatEngine.returns(closes)
+    recent = completed.tail(20)
+    adv20_shares = float(recent["volume"].astype(float).mean())
+    adv20_value = float((recent["close"].astype(float) * recent["volume"].astype(float)).mean())
+    if adv20_value >= 50e9:
+        tier = "A"
+    elif adv20_value >= 20e9:
+        tier = "B"
+    elif adv20_value >= CFG.MIN_ADV20_VALUE_VND:
+        tier = "C"
+    else:
+        tier = "D"
+    lot = VNMarketRules.profile(exchange)["lot_size"]
+    capacity = int(adv20_shares * CFG.MAX_ADV20_PARTICIPATION // lot) * lot
+    gap = (window["open"].astype(float) / closes.shift(1) - 1).replace([np.inf, -np.inf], np.nan).dropna()
+    return json_metrics({
+        "adv20_value_vnd": round(adv20_value, 0),
+        "liquidity_tier": tier,
+        "capacity_shares": max(capacity, 0),
+        "gap_abs_p95_pct": round(float(gap.abs().quantile(0.95) * 100), 2) if len(gap) else None,
+        "sharpe": stats.get("sharpe"),
+        "up_day_ratio_pct": stats.get("up_day_ratio_pct"),
+        "max_drawdown_pct": stats.get("max_dd_pct"),
+        "annual_return_pct": stats.get("ann_return_pct"),
+    })
+
+
+def log_return_tail(frame: pd.DataFrame | None, sessions: int = 60) -> pd.Series | None:
+    """Last `sessions` daily log returns of a validated frame, or None."""
+    if frame is None or len(frame) < 2 or "close" not in frame.columns:
+        return None
+    closes = frame["close"].astype(float)
+    returns = np.log(closes / closes.shift(1)).dropna()
+    return returns.tail(sessions) if len(returns) else None
+
+
+def sector_contexts(log_returns: dict[str, pd.Series], sectors: dict[str, str | None]) -> dict[str, dict]:
+    """Per-symbol sector context from member log returns.
+
+    Mirrors SectorEngine.sector_trend: the basket is the per-session mean
+    log return across members, the headline return compounds the last 20
+    sessions (5-session fallback), and trend bands sit at -3/-0.5/+0.5/+3
+    percent. sector_correlation is the mean pairwise correlation of member
+    log returns, None with fewer than 2 members or 40 shared sessions.
+    """
+    groups: dict[str, list[str]] = {}
+    for symbol, sector in sectors.items():
+        if sector and symbol in log_returns:
+            groups.setdefault(sector, []).append(symbol)
+    contexts: dict[str, dict] = {}
+    for sector, symbols in groups.items():
+        frame = pd.DataFrame({symbol: log_returns[symbol] for symbol in symbols})
+        basket = frame.mean(axis=1, skipna=True).dropna()
+        sector_return = None
+        if len(basket) >= 20:
+            sector_return = float((np.exp(basket.tail(20).sum()) - 1) * 100)
+        elif len(basket) >= 5:
+            sector_return = float((np.exp(basket.tail(5).sum()) - 1) * 100)
+        headline = sector_return or 0
+        if headline > 3:
+            label = "🟢 TĂNG MẠNH"
+        elif headline > 0.5:
+            label = "🟢 TĂNG"
+        elif headline > -0.5:
+            label = "⚪ ĐI NGANG"
+        elif headline > -3:
+            label = "🔴 GIẢM"
+        else:
+            label = "🔴 GIẢM MẠNH"
+        correlation = None
+        if len(symbols) >= 2 and len(frame) >= 40:
+            values = frame.corr().to_numpy(dtype=float)
+            off_diagonal = values[~np.eye(len(symbols), dtype=bool)]
+            off_diagonal = off_diagonal[np.isfinite(off_diagonal)]
+            if len(off_diagonal):
+                correlation = round(float(off_diagonal.mean()), 4)
+        for symbol in symbols:
+            contexts[symbol] = {"sector_trend": label if sector_return is not None else None,
+                "sector_return_20d_pct": round(sector_return, 2) if sector_return is not None else None,
+                "sector_correlation": correlation}
+    return json_metrics(contexts)
+
+
 def rank_results(results: list[dict], top_n: int = 70) -> dict:
     if top_n <= 0:
         raise ValueError("top_n must be positive")
