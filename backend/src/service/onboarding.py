@@ -17,7 +17,7 @@ def ensure_signup_plan(db) -> PlanVersion:
     """New immutable version; prior Free terms remain in historical records."""
     from service.operational_config import insert_for
     db.execute(insert_for(db)(PlanVersion).values(id=FREE_PLAN_ID, name="Free", price_vnd=0,
-        duration_days=30, analysis_quota=5, screening_quota=5, active_limit=1,
+        duration_days=30, analysis_quota=5, screening_quota=20, active_limit=1,
         features={"screening": True, "analysis": True}, available=False, created_at=int(time.time()))
         .on_conflict_do_nothing(index_elements=["id"]))
     return db.get(PlanVersion, FREE_PLAN_ID)
