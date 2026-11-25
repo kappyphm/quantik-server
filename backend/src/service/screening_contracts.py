@@ -36,6 +36,8 @@ class ScreeningItem(BaseModel):
     sector_trend: str | None = None
     sector_return_20d_pct: float | None = None
     sector_correlation: float | None = None
+    data_session: str | None = None
+    stale_sessions: int | None = None
     sector_lead_lag: str | None = None
     groups: dict[Literal["STRONG", "ACCUMULATION", "DISTRIBUTION"], ScreeningScore]
     eligible: bool

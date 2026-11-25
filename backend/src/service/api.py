@@ -353,10 +353,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if slot != "ALL":
             query = query.where(ScreeningRun.slot == slot)
         attempt = db.scalar(query.order_by(ScreeningRun.target_session.desc(), ScreeningRun.slot.desc()).limit(1))
+        latest_attempt = {"target_session": attempt.target_session.isoformat(), "slot": attempt.slot,
+            "status": attempt.status, "reason": attempt.reason} if attempt else None
         pointer = db.get(PublishedScreening, slot)
         if not pointer:
             return JSONResponse(status_code=503, content={"code": "SCREENING_NOT_READY",
-                "retry_after_seconds": 60}, headers={"Retry-After": "60"})
+                "latest_attempt": latest_attempt, "retry_after_seconds": 60}, headers={"Retry-After": "60"})
         run = db.get(ScreeningRun, pointer.run_id)
         require_screening_source(run)
         reasons = []
@@ -382,7 +384,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             reasons.append("PUBLICATION_AGE")
         from service.screening_access import quota_status
         return {**screening_header(run), "stale": bool(reasons), "refresh_after_seconds": 60,
-            "screening_quota": quota_status(db, account.id)}
+            "latest_attempt": latest_attempt, "stale_reasons": reasons, "screening_quota": quota_status(db, account.id)}
 
     @app.get("/api/v1/screenings/{run_id}/results", response_model=ScreeningPage)
     def screening_results(run_id: str, group: Literal["OVERALL", "DISTRIBUTION"] = "OVERALL",
