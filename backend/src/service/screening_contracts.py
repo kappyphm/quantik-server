@@ -50,6 +50,33 @@ class ScreeningPage(BaseModel):
     items: list[ScreeningItem]
 
 
+class ScreeningBoardItem(ScreeningItem):
+    action: str | None = None
+    gate_reasons: list[str] | None = None
+    score: float | None = None
+    rating: str | None = None
+    holding_sessions: int | None = None
+    hmm_regime: str | None = None
+    volatility_regime: str | None = None
+    forecast_direction: str | None = None
+    ensemble_return_pct: float | None = None
+    roundtrip_cost_pct: float | None = None
+    net_forecast_pct: float | None = None
+    lock_drawdown_pct: float | None = None
+    probability_loss_gt_3pct: float | None = None
+    entry_vnd: float | None = None
+    stop_loss_vnd: float | None = None
+    take_profit_1_vnd: float | None = None
+    take_profit_2_vnd: float | None = None
+    trade_model_agreement_pct: float | None = None
+
+
+class ScreeningBoard(BaseModel):
+    run_id: str
+    overall: list[ScreeningBoardItem]
+    distribution: list[ScreeningBoardItem]
+
+
 class ScreeningAssessment(BaseModel):
     overall_signal: str | None = None
     adjusted_signal: str | None = None
