@@ -303,6 +303,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         from service.analysis_readiness import options
         return options(db, settings, target_session)
 
+    @app.get("/api/v1/analyses/previous-session")
+    def previous_analysis_session(before: date, symbol: str = Query(pattern=r"^[A-Z0-9]{2,16}$"),
+                                  account=Depends(user), db=Depends(db_session)):
+        from service.market_data import DataError
+        from service.analysis_readiness import previous_ready_session
+        try:
+            return {"target_session": previous_ready_session(db, settings, before, symbol)}
+        except DataError as exc:
+            raise jobs.JobError(exc.code, 503 if exc.retryable else 422) from None
+
     @app.get("/api/v1/analyses")
     def analyses(account=Depends(user), db=Depends(db_session), cursor: str | None = None,
                  symbol: str | None = Query(None, pattern=r"^[A-Z0-9]{2,16}$"), limit: int = Query(20, ge=1, le=50)):

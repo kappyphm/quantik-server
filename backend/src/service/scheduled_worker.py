@@ -87,6 +87,9 @@ def execute(sessions: sessionmaker[Session], settings: Settings, task: Scheduled
         result = ingest_market(settings, task.target_session-timedelta(days=policy.history_calendar_days),
             task.target_session, input_mode="PROVISIONAL_DAILY" if task.slot == "AM" else "COMPLETED_DAILY",
             operation_guard=guard, resume=True)
+        # A partial publication can exist even though the provider stopped mid-universe.
+        if result.get("interrupted_reason"):
+            raise DataError(result["interrupted_reason"], True, result.get("retry_after"))
         if not result["manifest_id"]:
             raise DataError("INGESTION_MANIFEST_NOT_READY", True, result.get("retry_after"))
         return {"manifest_id": result["manifest_id"], "histories_available": result["histories_available"]}
