@@ -92,11 +92,22 @@ def previous_ready_session(db, settings, before: date, symbol: str) -> date | No
         DataManifest.target_session.in_(sessions), DataManifest.target_session < before,
         DataManifest.input_mode == "COMPLETED_DAILY").order_by(DataManifest.target_session.desc())).all()
     for day in candidates:
-        # Cheap membership pre-filter: validate_request loads and validates the
-        # whole day's manifest before its own snapshot check, which made a
-        # 60-session scan take ~40s and time out at the FE proxy.
+        # Cheap pre-filters: validate_request validates the whole day's
+        # manifest (~1,500 history rows) before its cheap gates, which made
+        # a 60-session scan take ~40s and time out at the FE proxy. Skip days
+        # validate_request would reject on its cheap checks anyway - snapshot
+        # membership, symbol history presence, and the published-model gate -
+        # and let validate_request remain the final arbiter for the rest.
         selected = snapshot_symbols(db, day)
         if selected is not None and symbol not in selected:
+            continue
+        manifest = db.scalar(select(DataManifest).where(
+            DataManifest.target_session == day,
+            DataManifest.input_mode == "COMPLETED_DAILY").order_by(
+            DataManifest.revision_order.desc()).limit(1))
+        if not manifest or symbol not in manifest.histories:
+            continue
+        if not settings.allow_degraded_analysis and not model_for_session(db, day, DEFAULT_CONFIG):
             continue
         try:
             validate_request(db, settings, day, symbol)
