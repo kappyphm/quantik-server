@@ -92,6 +92,12 @@ def previous_ready_session(db, settings, before: date, symbol: str) -> date | No
         DataManifest.target_session.in_(sessions), DataManifest.target_session < before,
         DataManifest.input_mode == "COMPLETED_DAILY").order_by(DataManifest.target_session.desc())).all()
     for day in candidates:
+        # Cheap membership pre-filter: validate_request loads and validates the
+        # whole day's manifest before its own snapshot check, which made a
+        # 60-session scan take ~40s and time out at the FE proxy.
+        selected = snapshot_symbols(db, day)
+        if selected is not None and symbol not in selected:
+            continue
         try:
             validate_request(db, settings, day, symbol)
         except DataError:
