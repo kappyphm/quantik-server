@@ -85,6 +85,21 @@ def options(db, settings, target: date | None = None) -> dict:
         "symbols": symbols, "ready": reason is None, "reason": reason}
 
 
+def previous_ready_session(db, settings, before: date, symbol: str) -> date | None:
+    """Search completed sessions with stored daily inputs, newest first."""
+    sessions = completed_sessions(db)[-60:]
+    candidates = db.scalars(select(DataManifest.target_session).distinct().where(
+        DataManifest.target_session.in_(sessions), DataManifest.target_session < before,
+        DataManifest.input_mode == "COMPLETED_DAILY").order_by(DataManifest.target_session.desc())).all()
+    for day in candidates:
+        try:
+            validate_request(db, settings, day, symbol)
+        except DataError:
+            continue
+        return day
+    return None
+
+
 def model_for_session(db, target: date, config: QuantConfig, *, now: int | None = None) -> str | None:
     today = datetime.fromtimestamp(int(time.time()) if now is None else now, VN).date()
     rows = db.execute(select(ModelVersion.id, ModelVersion.evidence, ModelVersion.config).where(

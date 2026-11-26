@@ -1,8 +1,8 @@
 """Read-only projections over immutable screening runs, with fixed top-five selection."""
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from service.models import DataManifest, ScreeningResult, ScreeningRun, UniverseVersion
+from service.models import AnalysisReport, Job, DataManifest, ScreeningResult, ScreeningRun, UniverseVersion
 
 
 def run_members(db: Session, run: ScreeningRun) -> dict:
@@ -72,3 +72,49 @@ def detail_view(run: ScreeningRun, row: ScreeningResult, member: dict | None = N
             "change_5d_ratio": trend["pct_change_5d"]/100 if trend.get("pct_change_5d") is not None else None,
             "change_20d_ratio": trend["pct_change_20d"]/100 if trend.get("pct_change_20d") is not None else None,
             "above_ma20": trend.get("above_ma20"), "atr_pct": volatility.get("atr_pct")}}
+
+
+def quant_columns(db: Session, run: ScreeningRun, account_id: str, symbols: set[str]) -> dict:
+    """Use only the viewer's completed reports on the exact screening input revision."""
+    manifest = run.manifest_id or (run.summary or {}).get("manifest_id")
+    if not manifest or not symbols or (run.summary or {}).get("input_mode") == "PROVISIONAL_DAILY":
+        return {}
+    report = AnalysisReport.payload
+    ranked = select(AnalysisReport.id.label("id"), Job.symbol,
+        func.row_number().over(partition_by=Job.symbol, order_by=(Job.evaluated_at.desc(), Job.id.desc())).label("rank")
+        ).join(Job, Job.id == AnalysisReport.job_id).where(
+        AnalysisReport.account_id == account_id, Job.account_id == account_id, Job.status == "SUCCEEDED",
+        Job.target_session == run.target_session, Job.symbol.in_(symbols),
+        report["versions"]["data_manifest"].as_string() == manifest).subquery()
+    sections = report["sections"]
+    names = ("decision", "agreement", "costs", "trade_plan", "statistics", "hmm", "context")
+    # Read only the metrics used by the sheet; research and price series can be large.
+    sources = {"decision": ("action", "rec"), "agreement": ("fcast",), "costs": ("costs",),
+        "trade_plan": ("sl",), "statistics": ("vol",), "hmm": ("hmm",), "context": ("cross_corr",)}
+    columns = [sections[name]["status"].as_string().label(name + "_status") for name in names]
+    for name, keys in sources.items():
+        columns.extend(sections[name]["metrics"][key].label(key) for key in keys)
+    rows = db.execute(select(ranked.c.symbol, *columns).join_from(ranked, AnalysisReport,
+        AnalysisReport.id == ranked.c.id).where(ranked.c.rank == 1)).mappings()
+    values = {}
+    for row in rows:
+        metrics = {key: (row[key] or {}) if row[name + "_status"] == "AVAILABLE" else {}
+            for name, keys in sources.items() for key in keys}
+        action, rec, forecast = metrics["action"], metrics["rec"], metrics["fcast"]
+        costs, stops = metrics["costs"], metrics["sl"]
+        lock = forecast.get("lock_risk") or {}
+        relations = metrics["cross_corr"].get("lead_lag") or []
+        values[row["symbol"]] = {
+            "action": action.get("action"), "gate_reasons": action.get("reason_codes"),
+            "score": rec.get("score"), "rating": rec.get("rating"),
+            "holding_sessions": forecast.get("hold_plan_sessions"), "hmm_regime": metrics["hmm"].get("current"),
+            "volatility_regime": metrics["vol"].get("regime"), "forecast_direction": forecast.get("consensus"),
+            "ensemble_return_pct": forecast.get("ensemble_ret_pct"), "roundtrip_cost_pct": costs.get("roundtrip_cost_pct"),
+            "net_forecast_pct": costs.get("net_forecast_pct"), "lock_drawdown_pct": lock.get("max_dd_lock_pct"),
+            "probability_loss_gt_3pct": lock.get("prob_loss_gt_3pct"), "entry_vnd": stops.get("entry"),
+            "stop_loss_vnd": stops.get("sl_swing"), "take_profit_1_vnd": stops.get("tp1"),
+            "take_profit_2_vnd": stops.get("tp_optimal") or stops.get("tp2") or stops.get("tp_2r"),
+            "trade_model_agreement_pct": stops.get("model_agreement_pct"),
+            "sector_lead_lag": relations[0].get("relation") if relations else None,
+        }
+    return values

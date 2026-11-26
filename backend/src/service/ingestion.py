@@ -125,6 +125,7 @@ def ingest_market(settings: Settings, start: date, target_session: date,
             raise DataError("UNKNOWN_INSTRUMENT")
         symbols = ["VNINDEX", *sorted(set(selected_symbols or members))]
         failures, retry_after = {}, None
+        interrupted_reason = None
         for symbol in symbols:
             if resume:
                 with sessions() as db:
@@ -152,6 +153,8 @@ def ingest_market(settings: Settings, start: date, target_session: date,
                 shared_failure = exc.code.startswith(("PROVIDER_", "VNSTOCK_")) and (
                     exc.retryable or exc.code.startswith(("VNSTOCK_AUTH", "VNSTOCK_TIER")))
                 if symbol == "VNINDEX" or shared_failure:
+                    if shared_failure and exc.retryable:
+                        interrupted_reason = exc.code
                     break  # Index is mandatory; outages/budgets stop the shared source.
                 # A suspended/new symbol lacking today's bar must not starve the
                 # rest of the market. Missing symbols remain explicitly unavailable.
@@ -166,6 +169,7 @@ def ingest_market(settings: Settings, start: date, target_session: date,
             except DataError as exc:
                 manifest_id = None
                 failures["manifest"] = exc.code
-        return {"manifest_id": manifest_id, "histories_available": len(histories), "failures": failures, "retry_after": retry_after}
+        return {"manifest_id": manifest_id, "histories_available": len(histories), "failures": failures, "retry_after": retry_after,
+            "interrupted_reason": interrupted_reason}
     finally:
         engine.dispose()

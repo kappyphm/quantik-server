@@ -18,7 +18,7 @@ from service import jobs
 from service.models import AnalysisReport, Job, QuotaBucket, Reservation
 from service.reports import ReportResult
 from service.models import PublishedScreening, ScreeningResult, ScreeningRun, UniverseVersion, QuotaRefund
-from service.screening_contracts import ScreeningPage, ScreeningDetail
+from service.screening_contracts import ScreeningPage, ScreeningDetail, ScreeningBoard
 from service.settings import Settings
 from service.telemetry import HttpMetrics, ProcessMonitor, emit
 from service.operations_health import Collector
@@ -303,6 +303,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         from service.analysis_readiness import options
         return options(db, settings, target_session)
 
+    @app.get("/api/v1/analyses/previous-session")
+    def previous_analysis_session(before: date, symbol: str = Query(pattern=r"^[A-Z0-9]{2,16}$"),
+                                  account=Depends(user), db=Depends(db_session)):
+        from service.market_data import DataError
+        from service.analysis_readiness import previous_ready_session
+        try:
+            return {"target_session": previous_ready_session(db, settings, before, symbol)}
+        except DataError as exc:
+            raise jobs.JobError(exc.code, 503 if exc.retryable else 422) from None
+
     @app.get("/api/v1/analyses")
     def analyses(account=Depends(user), db=Depends(db_session), cursor: str | None = None,
                  symbol: str | None = Query(None, pattern=r"^[A-Z0-9]{2,16}$"), limit: int = Query(20, ge=1, le=50)):
@@ -352,16 +362,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         query = select(ScreeningRun)
         if slot != "ALL":
             query = query.where(ScreeningRun.slot == slot)
-        attempt = db.scalar(query.order_by(ScreeningRun.target_session.desc(), ScreeningRun.slot.desc()).limit(1))
+        query = query.order_by(ScreeningRun.target_session.desc(), ScreeningRun.slot.desc())
+        attempt = db.scalar(query.limit(1))
+        # Only expose customer-facing session information.
+        latest_attempt = {"target_session": attempt.target_session.isoformat(), "slot": attempt.slot,
+            "status": attempt.status} if attempt else None
         pointer = db.get(PublishedScreening, slot)
-        if not pointer:
-            return JSONResponse(status_code=503, content={"code": "SCREENING_NOT_READY",
-                "retry_after_seconds": 60}, headers={"Retry-After": "60"})
-        run = db.get(ScreeningRun, pointer.run_id)
-        require_screening_source(run)
-        reasons = []
-        if attempt and (attempt.target_session, attempt.slot) >= (run.target_session, run.slot) and attempt.status != "READY":
-            reasons.append("LATEST_RUN_UNAVAILABLE")
+        expected = None
         from service.operational_config import active_version, TradingCalendar
         from service.calendar_reference import expected_screening
         calendar_version = active_version(db, "TRADING_CALENDAR")
@@ -373,20 +380,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if calendar.start <= now.astimezone(ZoneInfo("Asia/Ho_Chi_Minh")).date() <= calendar.end:
                 calendar_status = "READY"
                 expected = expected_screening(calendar, slot, now)
-                if expected and (run.target_session, run.slot) < expected:
-                    reasons.append("EXPECTED_SLOT_UNPUBLISHED")
             else:
                 calendar_status = "OUT_OF_RANGE"
-                reasons.append("CALENDAR_OUT_OF_RANGE")
+        session_info = {"latest_attempt": latest_attempt, "expected_session": expected[0].isoformat() if expected else None,
+            "expected_slot": expected[1] if expected else None}
+        run = db.get(ScreeningRun, pointer.run_id) if pointer else None
+        if run is None:
+            # A completed publication carries its timestamp even if its lookup pointer is missing.
+            published = query.where(ScreeningRun.status == "READY", ScreeningRun.published_at.is_not(None))
+            if not settings.allow_fixture_analysis:
+                published = published.where(ScreeningRun.summary["source_mode"].as_string().in_(
+                    ("LIVE_VALIDATED", "LIVE_SCREENING_VALIDATED")))
+            run = db.scalar(published.limit(1))
+        if run is None:
+            return JSONResponse(status_code=503, content={"code": "SCREENING_NOT_READY",
+                **session_info, "retry_after_seconds": 60}, headers={"Retry-After": "60"})
+        require_screening_source(run)
+        reasons = []
+        if attempt and (attempt.target_session, attempt.slot) >= (run.target_session, run.slot) and attempt.status != "READY":
+            reasons.append("LATEST_RUN_UNAVAILABLE")
+        if expected and (run.target_session, run.slot) < expected:
+            reasons.append("EXPECTED_SLOT_UNPUBLISHED")
+        if calendar_status == "OUT_OF_RANGE":
+            reasons.append("CALENDAR_OUT_OF_RANGE")
         if calendar_status != "READY" and int(time.time()) - run.published_at > 36*3600:
             reasons.append("PUBLICATION_AGE")
         from service.screening_access import quota_status
         return {**screening_header(run), "stale": bool(reasons), "refresh_after_seconds": 60,
-            "screening_quota": quota_status(db, account.id)}
+            **session_info, "stale_reasons": reasons, "screening_quota": quota_status(db, account.id)}
 
-    @app.get("/api/v1/screenings/{run_id}/results", response_model=ScreeningPage)
-    def screening_results(run_id: str, group: Literal["OVERALL", "DISTRIBUTION"] = "OVERALL",
-                          account=Depends(user), db=Depends(db_session)):
+    def require_published_screening(db, account, run_id):
         from service.screening_access import require_access
         require_access(db, account.id)
         run = db.get(ScreeningRun, run_id)
@@ -395,6 +418,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if run.status != "READY":
             raise jobs.JobError("SCREENING_RUN_NOT_READY", 409)
         require_screening_source(run)
+        return run
+
+    @app.get("/api/v1/screenings/{run_id}/board", response_model=ScreeningBoard)
+    def screening_board(run_id: str, account=Depends(user), db=Depends(db_session)):
+        from service.screening_access import consume_view
+        from service.screening_views import quant_columns, top_results
+        run = require_published_screening(db, account, run_id)
+        overall = top_results(db, run_id, "OVERALL")["items"]
+        distribution = top_results(db, run_id, "DISTRIBUTION")["items"]
+        items = overall + distribution
+        quant = quant_columns(db, run, account.id, {item["symbol"] for item in items})
+        for item in items:
+            item.update(quant.get(item["symbol"], {}))
+        board = ScreeningBoard(run_id=run_id, overall=overall, distribution=distribution)
+        consume_view(db, account.id)
+        return board
+
+    @app.get("/api/v1/screenings/{run_id}/results", response_model=ScreeningPage)
+    def screening_results(run_id: str, group: Literal["OVERALL", "DISTRIBUTION"] = "OVERALL",
+                          account=Depends(user), db=Depends(db_session)):
+        require_published_screening(db, account, run_id)
         from service.screening_access import consume_view
         consume_view(db, account.id)
         from service.screening_views import top_results

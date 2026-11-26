@@ -170,8 +170,19 @@ def test_screening_publication_deadline_all_results_and_api(tmp_path, monkeypatc
         latest = client.get("/api/v1/screenings/latest", headers=headers)
         assert latest.status_code == 200 and latest.json()["id"] == morning.id
         assert latest.json()["stale"]
-        assert not {"latest_attempt", "manifest_id", "summary", "schedule", "reason"} & latest.json().keys()
+        assert set(latest.json()["latest_attempt"]) == {"target_session", "slot", "status"}
+        assert not {"manifest_id", "summary", "schedule", "reason"} & latest.json().keys()
         base = f"/api/v1/screenings/{morning.id}"
+        with sessions() as db, db.begin():
+            db.delete(db.get(PublishedScreening, "ALL"))
+        recovered = client.get("/api/v1/screenings/latest", headers=headers)
+        assert recovered.status_code == 200 and recovered.json()["id"] == morning.id
+        before = latest.json()["screening_quota"]["used"]
+        board = client.get(base+"/board", headers=headers)
+        assert board.status_code == 200
+        assert [row["symbol"] for row in board.json()["overall"]] == ["AAA", "BBB"]
+        assert board.json()["distribution"]
+        assert client.get("/api/v1/screenings/latest", headers=headers).json()["screening_quota"]["used"] == before + 1
         page = client.get(base+"/results?group=OVERALL", headers=headers).json()
         assert [r["symbol"] for r in page["items"]] == ["AAA", "BBB"]
         assert page["group"] == "OVERALL" and "total_pages" not in page

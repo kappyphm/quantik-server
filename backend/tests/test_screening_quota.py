@@ -94,3 +94,36 @@ def test_no_subscription_still_requires_subscription(tmp_path, monkeypatch):
         with pytest.raises(JobError):
             require_access(db, account.id)
         assert quota_status(db, account.id) is None
+
+
+def test_board_quant_matches_account_manifest_and_symbol(tmp_path, monkeypatch):
+    from datetime import date
+    from types import SimpleNamespace
+    from service.models import AnalysisReport, Job
+    from service.screening_views import quant_columns
+
+    factory = _db(tmp_path, monkeypatch)
+    day = date(2026, 10, 16)
+    run = SimpleNamespace(manifest_id="published", summary={"input_mode": "COMPLETED_DAILY"}, target_session=day)
+    with factory() as db, db.begin():
+        viewer = _account_with_plan(db, "Free", 5)
+        other = _account_with_plan(db, "Pro", 20)
+        for seq, (account, revision, score) in enumerate([
+            (viewer, "published", 12), (viewer, "published", 0), (viewer, "older", 98), (other, "published", 99)
+        ]):
+            job = Job(account_id=account.id, bucket_id=db.scalar(select(QuotaBucket.id).where(
+                QuotaBucket.account_id == account.id)), idempotency_key=str(seq), payload_hash="0"*64,
+                symbol="AAA", target_session=day, inputs={}, policy={}, status="SUCCEEDED", created_at=seq,
+                ready_at=seq, deadline=seq+1, evaluated_at=seq)
+            db.add(job)
+            db.flush()
+            db.add(AnalysisReport(job_id=job.id, account_id=account.id, payload={"versions": {"data_manifest": revision},
+                "sections": {"decision": {"status": "AVAILABLE", "metrics": {"rec": {"score": score}}},
+                    "hmm": {"status": "UNAVAILABLE", "metrics": {"hmm": {"current": "unused"}}}}}))
+        db.flush()
+        rows = quant_columns(db, run, viewer.id, {"AAA", "BBB"})
+        assert set(rows) == {"AAA"}
+        assert rows["AAA"]["score"] == 0
+        assert rows["AAA"]["hmm_regime"] is None
+        run.summary["input_mode"] = "PROVISIONAL_DAILY"
+        assert quant_columns(db, run, viewer.id, {"AAA"}) == {}

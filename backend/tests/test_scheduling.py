@@ -192,6 +192,7 @@ def test_ingestion_resume_preserves_provider_budget(tmp_path, monkeypatch):
     monkeypatch.setattr(ingestion, "VnstockProvider", Provider)
     first = ingestion.ingest_market(settings, start, target, resume=True)
     assert first["manifest_id"] and first["retry_after"] == 600
+    assert first["interrupted_reason"] == "PROVIDER_BUDGET_EXHAUSTED"
     assert calls == ["VNINDEX", "AAA", "BBB"]
     second = ingestion.ingest_market(settings, start, target, resume=True)
     assert second["manifest_id"] and second["histories_available"] == 4
@@ -234,4 +235,24 @@ def test_ingestion_resume_preserves_provider_budget(tmp_path, monkeypatch):
     with pytest.raises(DataError, match="BACKFILL_YIELD_TO_SCHEDULE"):
         ingestion.ingest_market(settings, start, target, operation_guard=yield_after_index)
     assert calls[7:] == ["VNINDEX"]  # Stop at the boundary, before fetching equities.
+    engine.dispose()
+
+
+def test_scheduled_ingestion_retries_after_partial_publication(tmp_path, monkeypatch):
+    from service import ingestion
+    from service.scheduled_worker import execute
+
+    url, engine, sessions = database(tmp_path, monkeypatch)
+    settings = Settings(_env_file=None, environment="test", database_url=url, scheduled_provider_enabled=True)
+    task = SimpleNamespace(kind="INGEST", slot="PM", target_session=date(2026, 10, 15), id="fixture")
+    monkeypatch.setattr(scheduling, "assert_current", lambda *args: task)
+    monkeypatch.setattr(scheduling, "policy_for", lambda *args: SimpleNamespace(history_calendar_days=366))
+    result = {"manifest_id": "partial", "histories_available": 2, "retry_after": 600,
+              "interrupted_reason": "PROVIDER_BUDGET_EXHAUSTED"}
+    monkeypatch.setattr(ingestion, "ingest_market", lambda *args, **kwargs: result)
+    with pytest.raises(DataError) as blocked:
+        execute(sessions, settings, task, "token")
+    assert blocked.value.retryable and blocked.value.retry_after == 600
+    result.update(interrupted_reason=None, manifest_id="recovered")
+    assert execute(sessions, settings, task, "token")["manifest_id"] == "recovered"
     engine.dispose()
