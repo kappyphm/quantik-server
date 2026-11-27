@@ -3,10 +3,11 @@ import pandas as pd
 
 from service.quant.screening_legacy import FeatureEngine, ScreeningEngine
 
-POLICY = "prototype-liquidity-top70-1"
+POLICY = "prototype-liquidity-top300-1"
+TOP_N = 300
 
 
-def select_candidates(data: dict[str, pd.DataFrame], index: pd.DataFrame) -> tuple[list[str], dict[str, str]]:
+def select_candidates(data: dict[str, pd.DataFrame], index: pd.DataFrame, top_n: int = TOP_N) -> tuple[list[str], dict[str, str]]:
     scores, excluded = [], {}
     index_frame = index.reset_index(names="time")
     for symbol, frame in sorted(data.items()):
@@ -23,6 +24,6 @@ def select_candidates(data: dict[str, pd.DataFrame], index: pd.DataFrame) -> tup
             ScreeningEngine.screen_distribution(features)["score"]))
     # Same score priority as crawl_data.py; symbol resolves otherwise equal scores.
     scores.sort(key=lambda row: (-row[1], -row[2], row[3], row[0]))
-    selected = [row[0] for row in scores[:70]]
-    excluded.update({row[0]: "SCREENING_OUTSIDE_TOP70" for row in scores[70:]})
+    selected = [row[0] for row in scores[:top_n]]
+    excluded.update({row[0]: f"SCREENING_OUTSIDE_TOP{top_n}" for row in scores[top_n:]})
     return selected, excluded
