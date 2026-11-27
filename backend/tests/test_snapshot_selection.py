@@ -5,7 +5,7 @@ from typing import Dict
 import numpy as np
 import pandas as pd
 
-from service.quant.snapshot_selection import select_candidates
+from service.quant.snapshot_selection import TOP_N, select_candidates
 
 
 def test_snapshot_prefilter_matches_prototype_and_caps_expensive_candidates():
@@ -37,11 +37,14 @@ def test_snapshot_prefilter_matches_prototype_and_caps_expensive_candidates():
     expected = pd.DataFrame(rows).sort_values(["strong", "accum", "dist", "symbol"],
         ascending=[False, False, True, True]).symbol.tolist()
     selected, excluded = select_candidates(data, index)
-    assert selected == expected[:70]
-    assert len(selected) == 70
+    assert selected == expected[:TOP_N]
+    assert len(selected) == min(TOP_N, len(expected))
     assert excluded["LOW"] == "SCREENING_LOW_LIQUIDITY"
     assert excluded["NEW"] == "SCREENING_INSUFFICIENT_HISTORY"
-    assert all(excluded[symbol] == "SCREENING_OUTSIDE_TOP70" for symbol in expected[70:])
     assert set(selected) | set(excluded) == set(data)
+    capped, capped_excluded = select_candidates(data, index, top_n=70)
+    assert capped == expected[:70]
+    assert len(capped) == 70
+    assert all(capped_excluded[symbol] == "SCREENING_OUTSIDE_TOP70" for symbol in expected[70:])
     # Like the prototype, 20 bars suffice even if a longer-lookback rule is false.
     assert select_candidates({"YOUNG": data["YOUNG"]}, index) == (["YOUNG"], {})
